@@ -1,0 +1,225 @@
+{
+    "name": "technical-debt-manager",
+    "displayName": "Technical Debt Manager",
+    "description": "智能技术债务管理与代码热点分析工具 - 帮助开发团队识别、跟踪和管理技术债务",
+    "version": "0.0.0",
+    "publisher": "cs5351-Hinton",
+    "engines": {
+        "vscode": "^1.74.0"
+    },
+    "categories": [
+        "Linters",
+        "Other"
+    ],
+    "keywords": [
+        "technical debt",
+        "code analysis",
+        "code quality",
+        "refactoring",
+        "software metrics"
+    ],
+    "activationEvents": [
+        "onLanguage:python",
+        "onLanguage:javascript",
+        "onLanguage:typescript",
+        "onLanguage:java"
+    ],
+    "main": "./dist/extension.js",
+    "browser": "./dist/extension.js",
+    "contributes": {
+        "views": {
+            "explorer": [
+                {
+                    "id": "technicalDebtView",
+                    "name": "Technical Debt",
+                    "when": "workspaceHasFolder"
+                }
+            ]
+        },
+        "viewsWelcome": [
+            {
+                "view": "technicalDebtView",
+                "contents": "欢迎使用技术债务管理工具！\n[分析当前项目](command:technicalDebt.analyzeWorkspace)\n[打开分析面板](command:technicalDebt.showDashboard)\n[配置设置](command:technicalDebt.showSettings)"
+            }
+        ],
+        "commands": [
+            {
+                "command": "technicalDebt.analyzeWorkspace",
+                "title": "分析工作区技术债务",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.analyzeFile",
+                "title": "分析当前文件技术债务",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.showDashboard",
+                "title": "显示技术债务分析面板",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.showProjects",
+                "title": "管理项目",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.refresh",
+                "title": "刷新技术债务数据",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.showSettings",
+                "title": "配置技术债务工具",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.showDebtDetails",
+                "title": "显示债务详情",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.markAsInProgress",
+                "title": "标记为处理中",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.markAsResolved",
+                "title": "标记为已解决",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.ignoreDebt",
+                "title": "忽略此债务",
+                "category": "Technical Debt"
+            }
+        ],
+        "menus": {
+            "view/title": [
+                {
+                    "command": "technicalDebt.refresh",
+                    "when": "view == technicalDebtView",
+                    "group": "navigation"
+                },
+                {
+                    "command": "technicalDebt.analyzeWorkspace",
+                    "when": "view == technicalDebtView",
+                    "group": "navigation"
+                }
+            ],
+            "view/item/context": [
+                {
+                    "command": "technicalDebt.showDebtDetails",
+                    "when": "view == technicalDebtView && viewItem == debt",
+                    "group": "inline"
+                },
+                {
+                    "command": "technicalDebt.markAsInProgress",
+                    "when": "view == technicalDebtView && viewItem == debt",
+                    "group": "inline"
+                },
+                {
+                    "command": "technicalDebt.markAsResolved",
+                    "when": "view == technicalDebtView && viewItem == debt",
+                    "group": "inline"
+                },
+                {
+                    "command": "technicalDebt.ignoreDebt",
+                    "when": "view == technicalDebtView && viewItem == debt",
+                    "group": "inline"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "technicalDebt.analyzeFile",
+                    "when": "resourceLangId == python || resourceLangId == javascript || resourceLangId == typescript || resourceLangId == java",
+                    "group": "technical-debt@1"
+                }
+            ]
+        },
+        "configuration": {
+            "title": "Technical Debt Manager",
+            "properties": {
+                "technicalDebt.api.baseUrl": {
+                    "type": "string",
+                    "default": "http://localhost:8000/api/v1",
+                    "description": "技术债务后端 API 基础 URL"
+                },
+                "technicalDebt.api.timeout": {
+                    "type": "number",
+                    "default": 30000,
+                    "description": "API 请求超时时间（毫秒）"
+                },
+                "technicalDebt.analysis.autoAnalyzeOnSave": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "保存文件时自动分析技术债务"
+                },
+                "technicalDebt.analysis.excludedPatterns": {
+                    "type": "array",
+                    "default": [
+                        "**/node_modules/**",
+                        "**/dist/**",
+                        "**/build/**",
+                        "**/.git/**"
+                    ],
+                    "description": "排除分析的文件模式"
+                },
+                "technicalDebt.analysis.maxFileSize": {
+                    "type": "number",
+                    "default": 1048576,
+                    "description": "最大文件大小（字节），超过此大小的文件不会被分析"
+                },
+                "technicalDebt.ui.showStatusBar": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "在状态栏显示技术债务信息"
+                },
+                "technicalDebt.ui.decorationSeverity": {
+                    "type": "string",
+                    "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "critical"
+                    ],
+                    "default": "medium",
+                    "description": "显示装饰器的最小严重程度"
+                },
+                "technicalDebt.ui.heatmapEnabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "在编辑器中启用技术债务热点图装饰"
+                }
+            }
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run package",
+        "compile": "webpack",
+        "watch": "webpack --watch",
+        "package": "webpack --mode production --devtool hidden-source-map",
+        "test:api": "node scripts/api_integration_test.js",
+        "compile-tests": "tsc -p . --outDir out",
+        "watch-tests": "tsc -p . -w --outDir out",
+        "pretest": "npm run compile-tests && npm run compile && npm run lint",
+        "lint": "eslint src --ext ts",
+        "test": "vscode-test"
+    },
+    "devDependencies": {
+        "@types/vscode": "^1.74.0",
+        "@types/node": "16.x",
+        "@typescript-eslint/eslint-plugin": "^5.45.0",
+        "@typescript-eslint/parser": "^5.45.0",
+        "eslint": "^8.28.0",
+        "typescript": "^4.9.4",
+        "webpack": "^5.75.0",
+        "webpack-cli": "^5.0.1",
+        "ts-loader": "^9.4.2",
+        "@vscode/test-electron": "^2.2.0"
+    },
+    "dependencies": {
+        "axios": "^1.4.0",
+        "minimatch": "^5.1.0"
+    }
+}
