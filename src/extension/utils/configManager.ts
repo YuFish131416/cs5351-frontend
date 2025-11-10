@@ -20,7 +20,7 @@ export class ConfigManager {
         return {
             api: {
                 baseUrl: this.config.get<string>('api.baseUrl') || 'http://localhost:8000/api/v1',
-                timeout: this.config.get<number>('api.timeout') || 30000
+                timeout: this.config.get<number>('api.timeout') || 1500000
             },
             analysis: {
                 autoAnalyzeOnSave: this.config.get<boolean>('analysis.autoAnalyzeOnSave') || false,

@@ -67,6 +67,9 @@ async function getFileDebts(projectId, filePath) {
 
 async function run() {
   log('Starting API integration test');
+  // Support --skip-write CLI flag in addition to SKIP_WRITE env var
+  const argv = process.argv.slice(2);
+  const SKIP_WRITE_ARG = argv.includes('--skip-write');
   // Quick local checks: compiled bundle exists and package.json main points to it
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
@@ -93,21 +96,35 @@ async function run() {
   let projects = await listProjects();
   log('Projects count:', Array.isArray(projects) ? projects.length : 'unknown');
 
-  // create a sample project
-  const sampleName = `tdm-test-${Date.now()}`;
-  const sample = {
-    name: sampleName,
-    localPath: process.cwd(),
-    language: 'javascript'
-  };
+  // Decide whether to perform write operations (create project / trigger analysis)
+  const SKIP_WRITE = SKIP_WRITE_ARG || process.env.SKIP_WRITE === '1' || process.env.SKIP_WRITE === 'true';
 
-  log('Creating project:', sampleName);
-  const created = await createProject(sample);
-  log('Created project id:', created.id || created.project_id || JSON.stringify(created));
-  const projectId = created.id || created.project_id;
-  if (!projectId) {
-    console.error('Server did not return project id in response:', created);
-    process.exit(3);
+  let projectId;
+  if (SKIP_WRITE) {
+    log('SKIP_WRITE enabled — will not create project or trigger analysis. Using first existing project for read-only tests.');
+    if (!Array.isArray(projects) || projects.length === 0) {
+      console.error('No existing projects available to run read-only tests. Disable SKIP_WRITE or create a project first.');
+      process.exit(4);
+    }
+    projectId = projects[0].id || projects[0].project_id;
+    log('Using project id:', projectId);
+  } else {
+    // create a sample project
+    const sampleName = `tdm-test-${Date.now()}`;
+    const sample = {
+      name: sampleName,
+      localPath: process.cwd(),
+      language: 'javascript'
+    };
+
+    log('Creating project:', sampleName);
+    const created = await createProject(sample);
+    log('Created project id:', created.id || created.project_id || JSON.stringify(created));
+    projectId = created.id || created.project_id;
+    if (!projectId) {
+      console.error('Server did not return project id in response:', created);
+      process.exit(3);
+    }
   }
 
   // trigger project analysis

@@ -147,7 +147,7 @@
                 },
                 "technicalDebt.api.timeout": {
                     "type": "number",
-                    "default": 30000,
+                    "default": 1500000,
                     "description": "API 请求超时时间（毫秒）"
                 },
                 "technicalDebt.analysis.autoAnalyzeOnSave": {

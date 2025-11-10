@@ -25,7 +25,7 @@ export async function activate(context: vscode.ExtensionContext) {
     try {
         // 初始化服务
         const apiClient = new ApiClient();
-        const analysisService = new AnalysisService();
+    const analysisService = new AnalysisService(context);
         const debtService = new DebtService();
         const configManager = ConfigManager.getInstance();
 
@@ -186,9 +186,9 @@ function registerCommands(
     );
 
     // 面板命令
-    disposables.push(
+        disposables.push(
         vscode.commands.registerCommand('technicalDebt.showDashboard', () => {
-            DebtAnalysisPanel.createOrShow(context.extensionUri, debtService);
+            DebtAnalysisPanel.createOrShow(context.extensionUri, debtService, analysisService);
         })
     );
 
@@ -456,7 +456,7 @@ function registerEventListeners(
             const config = ConfigManager.getInstance().getConfig();
             if (config.analysis.autoAnalyzeOnSave) {
                 try {
-                    const analysisService = new AnalysisService();
+                    const analysisService = new AnalysisService(context);
                     await analysisService.analyzeFile(document.fileName);
 
                     // 刷新 UI

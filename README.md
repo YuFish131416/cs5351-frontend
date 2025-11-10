@@ -224,7 +224,6 @@ celery -A app.tasks.celery_app worker --loglevel=info
 #### 6. 验证部署
 
 访问 http://localhost:8000/docs 查看 API 文档
-访问 http://localhost:8000/health 检查服务状态
 
 ###  前端部署步骤
 #### 1. 克隆项目
@@ -409,9 +408,8 @@ npx tsc --noEmit
 | POST   | /api/v1/projects/{id}/analysis       | 触发代码分析     |
 | GET    | /api/v1/debts/project/{project_id}   | 获取项目债务列表 |
 | PUT    | /api/v1/debts/{id}                   | 更新债务状态     |
-## 🤝 贡献指南
- 
-## 自动化 API 与构建集成测试
+
+### 自动化 API 与构建集成测试
 
 仓库内包含一个脚本 `scripts/api_integration_test.js`，用于自动化检查以下内容：
 
@@ -429,6 +427,9 @@ npm run test:api
 
 测试会打印每一步的结果；若发生错误会以非零退出码结束。该脚本为集成测试，会对后端做写操作（创建项目、触发分析）。如需只做只读检查，请在脚本中注释相关步骤。
 
+
+## 🤝 贡献指南
+ 
 ### 开发流程
 1. Fork 项目仓库
 

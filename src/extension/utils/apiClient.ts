@@ -85,6 +85,63 @@ export class ApiClient {
         return this.client.post('/projects', projectData);
     }
 
+    // Create project with optional Idempotency-Key header
+    async createProjectIdempotent(projectData: Partial<Project>, idempotencyKey?: string): Promise<Project> {
+        const config: AxiosRequestConfig = {};
+        if (idempotencyKey) {
+            config.headers = { 'Idempotency-Key': idempotencyKey };
+        }
+        return this.client.post('/projects', projectData, config);
+    }
+
+    // 查找项目 by local path（如果后端实现了专门接口则调用它，否则前端会落回到 /projects 列表）
+    async getProjectByPath(localPath: string): Promise<Project | null> {
+        const tryServer = async (p: string) => {
+            try {
+                const res = await this.client.get(`/projects/by-path`, { params: { localPath: p } });
+                return (res as any) || null;
+            } catch (e) {
+                return null;
+            }
+        };
+
+        // 1) try original
+        let project = await tryServer(localPath);
+        if (project) return project;
+
+        // 2) try normalized variants to handle Windows/URL encoding differences
+        const variants: string[] = [];
+        // replace backslashes with forward slashes
+        variants.push(localPath.replace(/\\/g, '/'));
+        // replace forward slashes with backslashes
+        variants.push(localPath.replace(/\//g, '\\'));
+        // trim trailing slashes
+        variants.push(localPath.replace(/[\\/]+$/, ''));
+        // normalized path (node)
+        try {
+            const path = require('path');
+            variants.push(path.normalize(localPath));
+        } catch (e) {
+            // ignore
+        }
+
+        for (const v of variants) {
+            if (!v) continue;
+            project = await tryServer(v);
+            if (project) return project;
+        }
+
+        // fallback to listing projects and matching with loose normalization
+        const projects = await this.getProjects();
+        const normalize = (p: string) => {
+            let s = (p || '').split('\\').join('/');
+            while (s.endsWith('/')) s = s.slice(0, -1);
+            return s.toLowerCase();
+        };
+        const target = normalize(localPath);
+        return projects.find(p => normalize(p.localPath) === target) || null;
+    }
+
     async updateProject(projectId: string, projectData: Partial<Project>): Promise<Project> {
         return this.client.put(`/projects/${projectId}`, projectData);
     }
@@ -96,6 +153,24 @@ export class ApiClient {
             file_path: filePath,
             incremental: !!filePath
         });
+    }
+
+    // 获取项目当前状态（锁信息 / current_analysis 等）
+    async getProjectCurrent(projectId: string): Promise<any> {
+        return this.client.get(`/projects/${projectId}/current`);
+    }
+
+    // Lock APIs
+    async lockProject(projectId: string, clientId: string, ttlSeconds: number = 300): Promise<any> {
+        return this.client.post(`/projects/${projectId}/lock`, { client_id: clientId, ttl_seconds: ttlSeconds });
+    }
+
+    async renewLock(projectId: string, clientId: string, ttlSeconds: number = 300): Promise<any> {
+        return this.client.post(`/projects/${projectId}/lock/renew`, { client_id: clientId, ttl_seconds: ttlSeconds });
+    }
+
+    async unlockProject(projectId: string, clientId: string): Promise<any> {
+        return this.client.post(`/projects/${projectId}/unlock`, { client_id: clientId });
     }
 
     // 获取分析状态 — 后端路径为 /projects/{project_id}/analysis/{analysis_id}
