@@ -97,7 +97,7 @@
 
 ### 3.2 API 端点
 
-| Method | Endpoint | 说明 |
+| Method | Endpoint | 常用场景 |
 | --- | --- | --- |
 | `GET` | `/api/v1/projects/` | 列出所有项目（含本地路径、仓库信息）。 |
 | `POST` | `/api/v1/projects/` | 创建项目；支持幂等键 `Idempotency-Key`。 |
@@ -108,6 +108,8 @@
 | `PUT` | `/api/v1/debts/{debt_id}` | 更新债务状态（`open/in_progress/resolved/ignored`）。 |
 | `GET` | `/api/v1/projects/{id}/current` | 返回当前分析锁与状态信息。 |
 | `GET` | `/api/v1/projects/{id}/heatmap` | 返回热力图指标（供前端后续可视化使用）。 |
+
+更多参数与响应示例请参考 `http://localhost:8000/docs`。
 
 所有错误都会返回结构化 JSON，包含 `error`、`message`、`service` 等字段，前端 `DebtService` 会解析后转为用户友好提示，并记录到输出通道。
 
@@ -302,85 +304,6 @@
 ## 致谢
 - PyDriller、Radon 为分析算法提供支持
 - VS Code 扩展 API 与 FastAPI/Celery 构成整体架构
-
-### 主要 API 端点
-| 方法 | 端点 | 功能概要 |
-| --- | --- | --- |
-| `GET` | `/api/v1/projects/` | 列出所有登记项目（含路径、仓库信息）。 |
-| `POST` | `/api/v1/projects/` | 创建或幂等更新项目记录，接受仓库路径等元数据。 |
-| `POST` | `/api/v1/projects/{id}/analysis` | 触发项目或指定文件的分析，支持 `file_path` 查询参数。 |
-| `GET` | `/api/v1/debts/project/{project}` | 获取项目或文件级债务列表，可通过 `file_path` 精确过滤。 |
-| `PUT` | `/api/v1/debts/{debt_id}` | 更新债务状态（`open/in_progress/resolved/ignored`）。 |
-
-API 详情请参考 `http://localhost:8000/docs`
-
-### 自动化 API 与构建集成测试
-
-仓库内包含一个脚本 `scripts/api_integration_test.js`，用于自动化检查以下内容：
-
-- 构建产物是否存在（`dist/extension.js`），以及 `package.json` 的 `main` 是否正确指向该产物。
-- 后端关键 API 是否可达并返回预期字段（projects 列表、创建项目、触发分析、轮询分析状态、获取债务摘要与债务列表）。
-
-运行测试：
-
-```powershell
-# 可选：覆盖默认后端地址
-$env:TDM_API_BASE = 'http://localhost:8000/api/v1'
-
-npm run test:api
-```
-
-测试会打印每一步的结果；若发生错误会以非零退出码结束。该脚本为集成测试，会对后端做写操作（创建项目、触发分析）。如需只做只读检查，请在脚本中注释相关步骤。
-
-
-## 🤝 贡献指南
- 
-### 开发流程
-1. Fork 项目仓库
-
-2. 创建功能分支 (git checkout -b feature/amazing-feature)
-
-3. 提交更改 (git commit -m 'Add some amazing feature')
-
-4. 推送到分支 (git push origin feature/amazing-feature)
-
-5. 创建 Pull Request
-
-### 代码规范
-- 使用 Black 进行 Python 代码格式化
-
-- 使用 ESLint 进行 TypeScript 代码检查
-
-- 遵循 Conventional Commits 提交规范
-
-- 编写单元测试，保持测试覆盖率
-
-## 📝 许可证
-本项目采用 MIT 许可证 - 查看 LICENSE 文件了解详情。
-
-## 👥 开发团队
-CS5351 - Hinton团队
-
-| 成员 | 角色 | 主要负责 |
-|------|------|----------|
-| 张三 | 后端开发 | 分析引擎、API 设计 |
-| 李四 | 前端开发 | VS Code 插件、UI/UX |
-| 王五 | 算法工程师 | 债务评分算法 |
-| 赵六 | 全栈开发 | Web 管理端、集成测试 |
-| 钱七 | DevOps | 部署运维、CI/CD |
-| 孙八 | 产品经理 | 需求分析、文档编写 |
-## 🙏 致谢
-感谢以下开源项目的支持：
-
-- FastAPI - 现代、快速的 Web 框架
-
-- PyDriller - Python Git 仓库分析库
-
-- Radon - Python 代码度量工具
-
-- VS Code Extension API - 插件开发框架
-
-- Vue.js - 渐进式 JavaScript 框架
 
 -------------------
 
