@@ -371,8 +371,19 @@ export class DebtService {
         this.cache.delete(key);
     }
 
-    private clearDebtRelatedCaches(projectId: string): void {
-        this.clearProjectCache(projectId);
+    private clearDebtRelatedCaches(projectId?: string): void {
+        if (projectId) {
+            this.clearProjectCache(projectId);
+        } else {
+            // 未知项目时，尽量清理债务相关缓存键
+            const keysToDelete: string[] = [];
+            this.cache.forEach((_, key) => {
+                if (key.startsWith('debts:') || key.startsWith('fileDebts:') || key.startsWith('summary:')) {
+                    keysToDelete.push(key);
+                }
+            });
+            keysToDelete.forEach(k => this.cache.delete(k));
+        }
         this.clearCache('projects');
     }
 

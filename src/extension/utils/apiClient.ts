@@ -74,15 +74,46 @@ export class ApiClient {
 
     // 项目相关 API
     async getProjects(): Promise<Project[]> {
-        return this.client.get('/projects');
+        const raw: any = await (this.client as any).get('/projects');
+        const mapProject = (p: any): Project => ({
+            id: String(p.id ?? p.project_id),
+            name: p.name,
+            description: p.description ?? '',
+            repoUrl: p.repo_url ?? p.repoUrl ?? '',
+            localPath: p.localPath ?? p.local_path ?? '',
+            language: p.language ?? '',
+            createdAt: p.created_at ?? p.createdAt ?? '',
+            updatedAt: p.updated_at ?? p.updatedAt ?? ''
+        });
+        return Array.isArray(raw) ? raw.map(mapProject) : [];
     }
 
     async getProject(projectId: string): Promise<Project> {
-        return this.client.get(`/projects/${projectId}`);
+        const p: any = await (this.client as any).get(`/projects/${projectId}`);
+        return {
+            id: String(p.id ?? p.project_id),
+            name: p.name,
+            description: p.description ?? '',
+            repoUrl: p.repo_url ?? p.repoUrl ?? '',
+            localPath: p.localPath ?? p.local_path ?? '',
+            language: p.language ?? '',
+            createdAt: p.created_at ?? p.createdAt ?? '',
+            updatedAt: p.updated_at ?? p.updatedAt ?? ''
+        };
     }
 
     async createProject(projectData: Partial<Project>): Promise<Project> {
-        return this.client.post('/projects', projectData);
+        const res: any = await (this.client as any).post('/projects', projectData);
+        return {
+            id: String(res.id ?? res.project_id),
+            name: res.name,
+            description: res.description ?? '',
+            repoUrl: res.repo_url ?? res.repoUrl ?? '',
+            localPath: res.localPath ?? res.local_path ?? '',
+            language: res.language ?? '',
+            createdAt: res.created_at ?? res.createdAt ?? '',
+            updatedAt: res.updated_at ?? res.updatedAt ?? ''
+        };
     }
 
     // Create project with optional Idempotency-Key header
@@ -91,7 +122,17 @@ export class ApiClient {
         if (idempotencyKey) {
             config.headers = { 'Idempotency-Key': idempotencyKey };
         }
-        return this.client.post('/projects', projectData, config);
+        const res: any = await (this.client as any).post('/projects', projectData, config);
+        return {
+            id: String(res.id ?? res.project_id),
+            name: res.name,
+            description: res.description ?? '',
+            repoUrl: res.repo_url ?? res.repoUrl ?? '',
+            localPath: res.localPath ?? res.local_path ?? '',
+            language: res.language ?? '',
+            createdAt: res.created_at ?? res.createdAt ?? '',
+            updatedAt: res.updated_at ?? res.updatedAt ?? ''
+        };
     }
 
     // 查找项目 by local path（如果后端实现了专门接口则调用它，否则前端会落回到 /projects 列表）
@@ -161,16 +202,23 @@ export class ApiClient {
     }
 
     // Lock APIs
+    // Lock APIs
+    // NOTE: 后端已调整为在处理期间自动加锁并在处理完成时自动解锁。
+    // 保留这些方法以保持向后兼容，但前端将不再发起显式的锁/解锁请求，调用将返回一个已忽略的提示。
     async lockProject(projectId: string, clientId: string, ttlSeconds: number = 300): Promise<any> {
-        return this.client.post(`/projects/${projectId}/lock`, { client_id: clientId, ttl_seconds: ttlSeconds });
+        // 不再发送请求给后端。保留调用签名以免破坏现有代码路径。
+        vscode.window.showInformationMessage('后端已改为在处理期间自动加锁，前端不再需要手动加锁，已忽略此调用。');
+        return Promise.resolve({ message: 'ignored - server-managed-locking' });
     }
 
     async renewLock(projectId: string, clientId: string, ttlSeconds: number = 300): Promise<any> {
-        return this.client.post(`/projects/${projectId}/lock/renew`, { client_id: clientId, ttl_seconds: ttlSeconds });
+        vscode.window.showInformationMessage('后端自动管理锁续租，前端 renewLock 已被忽略。');
+        return Promise.resolve({ message: 'ignored - server-managed-locking' });
     }
 
     async unlockProject(projectId: string, clientId: string): Promise<any> {
-        return this.client.post(`/projects/${projectId}/unlock`, { client_id: clientId });
+        vscode.window.showInformationMessage('后端在处理完成时会自动解锁，前端不再需要手动解锁，已忽略此调用。');
+        return Promise.resolve({ message: 'ignored - server-managed-locking' });
     }
 
     // 获取分析状态 — 后端路径为 /projects/{project_id}/analysis/{analysis_id}
@@ -185,32 +233,104 @@ export class ApiClient {
         status?: DebtStatus[];
     }): Promise<DebtItem[]> {
         const params = new URLSearchParams();
-        if (filters?.severity) {
-            filters.severity.forEach(s => params.append('severity', s));
-        }
-        if (filters?.type) {
-            filters.type.forEach(t => params.append('type', t));
-        }
-        if (filters?.status) {
-            filters.status.forEach(s => params.append('status', s));
-        }
-
-        return this.client.get(`/debts/project/${projectId}?${params.toString()}`);
+        // 仅传递 file_path（后端当前仅支持），其余过滤在前端进行
+        const raw: any = await (this.client as any).get(`/debts/project/${projectId}?${params.toString()}`);
+        const mapStatusFromServer = (s: string): DebtStatus => {
+            if (!s) return DebtStatus.OPEN;
+            const v = String(s).toLowerCase();
+            if (v === 'ignored') return DebtStatus.WONT_FIX;
+            if (v === 'in_progress') return DebtStatus.IN_PROGRESS;
+            if (v === 'resolved') return DebtStatus.RESOLVED;
+            return DebtStatus.OPEN;
+        };
+        const mapSeverity = (s: string): DebtSeverity => {
+            const v = String(s || '').toLowerCase();
+            if (v === 'critical') return DebtSeverity.CRITICAL;
+            if (v === 'high') return DebtSeverity.HIGH;
+            if (v === 'medium') return DebtSeverity.MEDIUM;
+            return DebtSeverity.LOW;
+        };
+        return (Array.isArray(raw) ? raw : []).map((d: any): DebtItem => ({
+            id: String(d.id),
+            projectId: String(projectId),
+            filePath: d.file_path ?? d.filePath ?? '',
+            debtType: DebtType.CODE_SMELL,
+            severity: mapSeverity(d.severity),
+            description: d.message ?? d.description ?? '',
+            estimatedEffort: 0,
+            status: mapStatusFromServer(d.status),
+            metadata: d.line ? { location: { line: Number(d.line) || 1 } } : undefined,
+            createdAt: d.created_at ?? '',
+            updatedAt: d.updated_at ?? ''
+        }));
     }
 
     async getDebtSummary(projectId: string): Promise<DebtSummary> {
-        return this.client.get(`/projects/${projectId}/debt-summary`);
+        const raw: any = await (this.client as any).get(`/projects/${projectId}/debt-summary`);
+        const bySeverityRaw = raw?.by_severity || raw?.bySeverity || {};
+        const pick = (k: string) => Number(bySeverityRaw[k] || 0);
+        return {
+            totalDebts: Number(raw?.total ?? 0),
+            bySeverity: {
+                [DebtSeverity.LOW]: pick('low'),
+                [DebtSeverity.MEDIUM]: pick('medium'),
+                [DebtSeverity.HIGH]: pick('high'),
+                [DebtSeverity.CRITICAL]: pick('critical'),
+            },
+            byType: {
+                [DebtType.COMPLEXITY]: 0,
+                [DebtType.DUPLICATION]: 0,
+                [DebtType.CODE_SMELL]: 0,
+                [DebtType.TODO]: 0,
+                [DebtType.HOTSPOT]: 0,
+            },
+            totalEstimatedEffort: 0,
+            averageDebtScore: 0,
+        };
     }
 
     async updateDebtStatus(debtId: string, status: DebtStatus, comment?: string): Promise<DebtItem> {
-        return this.client.put(`/debts/${debtId}`, { status, comment });
+        const toServerStatus = (s: DebtStatus) => s === DebtStatus.WONT_FIX ? 'ignored' : s;
+        const res: any = await (this.client as any).put(`/debts/${debtId}`, { status: toServerStatus(status), comment });
+        const mapStatusFromServer = (s: string): DebtStatus => {
+            if (!s) return DebtStatus.OPEN;
+            const v = String(s).toLowerCase();
+            if (v === 'ignored') return DebtStatus.WONT_FIX;
+            if (v === 'in_progress') return DebtStatus.IN_PROGRESS;
+            if (v === 'resolved') return DebtStatus.RESOLVED;
+            return DebtStatus.OPEN;
+        };
+        return {
+            id: String(res.id),
+            projectId: String(res.project_id ?? res.projectId ?? ''),
+            filePath: res.file_path ?? res.filePath ?? '',
+            debtType: DebtType.CODE_SMELL,
+            severity: (String(res.severity || 'low').toLowerCase() as any) as DebtSeverity,
+            description: res.message ?? res.description ?? '',
+            estimatedEffort: 0,
+            status: mapStatusFromServer(res.status),
+            metadata: res.line ? { location: { line: Number(res.line) || 1 } } : undefined,
+            createdAt: res.created_at ?? '',
+            updatedAt: res.updated_at ?? ''
+        };
     }
 
     // 获取指定文件的债务。后端路由为 GET /debts/project/{project_id}，通过 query param file_path 过滤。
     async getFileDebts(projectId: string, filePath: string): Promise<DebtItem[]> {
-        return this.client.get(`/debts/project/${projectId}`, {
-            params: { file_path: filePath }
-        });
+        const raw: any = await (this.client as any).get(`/debts/project/${projectId}`, { params: { file_path: filePath } });
+        return (Array.isArray(raw) ? raw : []).map((d: any): DebtItem => ({
+            id: String(d.id),
+            projectId: String(projectId),
+            filePath: d.file_path ?? d.filePath ?? '',
+            debtType: DebtType.CODE_SMELL,
+            severity: (String(d.severity || 'low').toLowerCase() as any) as DebtSeverity,
+            description: d.message ?? d.description ?? '',
+            estimatedEffort: 0,
+            status: (String(d.status || 'open').toLowerCase() === 'ignored') ? DebtStatus.WONT_FIX : (d.status as DebtStatus),
+            metadata: d.line ? { location: { line: Number(d.line) || 1 } } : undefined,
+            createdAt: d.created_at ?? '',
+            updatedAt: d.updated_at ?? ''
+        }));
     }
 
     // 热点图数据

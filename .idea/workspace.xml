@@ -5,36 +5,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="1e4ce8a2-871c-4a7c-b061-963a53e20378" name="更改" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.vscode/extensions.json" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.vscode/settings.json" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/package-lock.json" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/extension/decorators/debtDecorator.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/extension/extension.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/extension/providers/codeLensProvider.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/extension/providers/hoverProvider.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/extension/providers/technicalDebtProvider.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/extension/services/analysisService.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/extension/services/debtService.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/extension/utils/apiClient.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/extension/utils/configManager.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/extension/utils/logger.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/types/api.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/types/debt.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/types/extension.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/webview/panels/debtAnalysisPanel.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/webview/panels/projectPanel.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/webview/panels/settingsPanel.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/webview/utils/getNonce.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/webview/vue-app/package-lock.json" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/webview/vue-app/package.json" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/webview/vue-app/src/main.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/tsconfig.json" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/webpack.config.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dist/extension.js" beforeDir="false" afterPath="$PROJECT_DIR$/dist/extension.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/dist/extension.js.map" beforeDir="false" afterPath="$PROJECT_DIR$/dist/extension.js.map" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/extension/services/analysisService.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/extension/services/analysisService.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/extension/utils/apiClient.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/extension/utils/apiClient.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/webview/panels/debtAnalysisPanel.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/webview/panels/debtAnalysisPanel.ts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -44,29 +21,30 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="ProjectColorInfo"><![CDATA[{
-  "customColor": "",
-  "associatedIndex": 5
-}]]></component>
+  <component name="ProjectColorInfo">{
+  &quot;customColor&quot;: &quot;&quot;,
+  &quot;associatedIndex&quot;: 5
+}</component>
   <component name="ProjectId" id="356nnJeDNkXv0Mn8Bv9XTw17ifo" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "git-widget-placeholder": "master",
-    "kotlin-language-version-configured": "true",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "settings.editor.selected.configurable": "com.tsf.plugin.config.RootConfigurable",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;D:/Program Files/Desktop/下载/github-copilot-intellij-1.5.59-241.zip&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
@@ -84,6 +62,8 @@
       <option name="presentableId" value="Default" />
       <updated>1762439556127</updated>
       <workItem from="1762439557649" duration="484000" />
+      <workItem from="1762852675603" duration="658000" />
+      <workItem from="1762854472139" duration="822000" />
     </task>
     <servers />
   </component>

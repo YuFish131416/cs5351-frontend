@@ -70,25 +70,14 @@ export class AnalysisService {
                 this.logger.info(`创建或获取项目: ${project.name}`);
             }
 
-            // 尝试为该项目加锁，避免并发重复触发
-            try {
-                await this.apiClient.lockProject(project.id, this.clientId, 300);
-                this.logger.info(`已为项目加锁: ${project.id} (client=${this.clientId})`);
-            } catch (lockErr: any) {
-                // 如果锁被占用，后端应返回 409 并包含 locked_by
-                const lockedBy = lockErr?.response?.data?.locked_by || lockErr?.response?.data?.owner;
-                this.logger.warn(`无法为项目加锁（已被占用）: ${lockedBy}`);
-                vscode.window.showInformationMessage(`项目正在被其他客户端处理（${lockedBy}），已取消本次触发`);
-                return null;
-            }
+            // 注意: 后端已改为在触发分析时自动加锁并在处理完成后自动解锁。
+            // 前端不再显式请求锁，直接继续触发分析。
 
             // 检查是否已有正在运行的分析，避免重复触发
             try {
                 const current = await this.apiClient.getProjectCurrent(project.id);
                 if (current && current.current_analysis_id && ['running','analyzing','started'].includes((current.status || '').toString())) {
                     this.logger.info(`项目已有正在运行的分析: ${current.current_analysis_id}`);
-                    // 释放锁（如果我们刚刚获得锁则需要解锁）
-                    try { await this.apiClient.unlockProject(project.id, this.clientId); } catch(e){}
                     vscode.window.showInformationMessage('项目已有正在运行的分析，已取消重复触发');
                     return null;
                 }
@@ -148,14 +137,7 @@ export class AnalysisService {
                 }, idempotencyKey);
             }
 
-            // 尝试加锁
-            try {
-                await this.apiClient.lockProject(project.id, this.clientId, 300);
-            } catch (lockErr: any) {
-                const lockedBy = lockErr?.response?.data?.locked_by;
-                vscode.window.showInformationMessage(`项目被其他客户端占用(${lockedBy})，跳过触发文件分析`);
-                return null;
-            }
+            // 注意: 后端会在处理期间自动加锁，前端不再向后端发起显式加锁请求。
 
             const analysisResult = await this.apiClient.triggerAnalysis(project.id, relativePath);
 
@@ -163,8 +145,7 @@ export class AnalysisService {
             const analysisId = (analysisResult as any).analysis_id || (analysisResult as any).task_id || (analysisResult as any).id || (analysisResult as any).taskId;
             const debts = await this.waitForFileAnalysis(analysisId, relativePath, project.id);
 
-            // 解锁（尝试）
-            try { await this.apiClient.unlockProject(project.id, this.clientId); } catch (e) {}
+            // 后端将自动在处理完成时解锁；前端无需显式解锁。
 
             return debts;
         } catch (error) {
@@ -193,6 +174,8 @@ export class AnalysisService {
                 try {
                     const status = await this.apiClient.getAnalysisStatus(projectId, analysisId);
 
+                    // 如果后端直接返回 4xx 错误（例如 400 表示无效的 analysisId），将其视为终止条件，避免无限轮询
+                    // 注意：axios 在响应拦截器中会将非 2xx 的响应抛出为异常，因此大多数 4xx 会进入 catch 分支下面。
                     switch (status.status) {
                         case 'completed':
                             isCompleted = true;
@@ -217,6 +200,14 @@ export class AnalysisService {
                         retryCount++;
                     }
                 } catch (error) {
+                    // 如果是 HTTP 错误并且状态码位于 400-499，通常表示请求不正确或资源不存在，停止轮询并告知用户
+                    const statusCode = error?.response?.status;
+                    if (statusCode && statusCode >= 400 && statusCode < 500) {
+                        this.logger.error(`检查分析状态失败（客户端错误 ${statusCode}），停止轮询: ${error.message}`);
+                        vscode.window.showErrorMessage(`无法获取分析状态（${statusCode}）: ${error?.response?.data?.detail || error.message}`);
+                        break;
+                    }
+
                     this.logger.error(`检查分析状态失败: ${error.message}`);
                     retryCount++;
                     await new Promise(resolve => setTimeout(resolve, 5000));
@@ -229,13 +220,7 @@ export class AnalysisService {
 
             // 删除基于 projectId 的当前分析记录
             this.currentAnalysis.delete(projectId);
-                // 在分析结束后尝试释放锁（如果是本客户端持有）
-                try {
-                    await this.apiClient.unlockProject(projectId, this.clientId);
-                    this.logger.info(`已释放项目锁: ${projectId}`);
-                } catch (e) {
-                    this.logger.warn(`释放项目锁失败: ${e?.message || e}`);
-                }
+            // 注意：后端现在负责在处理完成后自动解锁，前端不再尝试显式解锁。
         });
     }
 
