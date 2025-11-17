@@ -106,7 +106,7 @@
 | `GET` | `/api/v1/projects/{id}/analysis/{analysis_id}` | 查询分析状态。 |
 | `GET` | `/api/v1/debts/project/{project}` | 获取债务列表；支持 `file_path` 过滤；自动触发增量分析。 |
 | `PUT` | `/api/v1/debts/{debt_id}` | 更新债务状态（`open/in_progress/resolved/ignored`）。 |
-| `GET` | `/api/v1/projects/{id}/current` | 返回当前分析锁与状态信息。 |
+| `GET` | `/api/v1/projects/{id}/current` | 遍历项目目录，对支持的文件后缀批量执行分析并写回数据库。 |
 | `GET` | `/api/v1/projects/{id}/heatmap` | 返回热力图指标（供前端后续可视化使用）。 |
 
 更多参数与响应示例请参考 `http://localhost:8000/docs`。
