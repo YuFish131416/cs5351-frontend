@@ -25,7 +25,8 @@ export class ConfigManager {
             analysis: {
                 autoAnalyzeOnSave: this.config.get<boolean>('analysis.autoAnalyzeOnSave') || false,
                 excludedPatterns: this.config.get<string[]>('analysis.excludedPatterns') || ['**/node_modules/**', '**/dist/**'],
-                maxFileSize: this.config.get<number>('analysis.maxFileSize') || 1024 * 1024
+                maxFileSize: this.config.get<number>('analysis.maxFileSize') || 1024 * 1024,
+                refreshInterval: this.config.get<number>('analysis.refreshInterval') || 0
             },
             ui: {
                 showStatusBar: this.config.get<boolean>('ui.showStatusBar') || true,

@@ -250,6 +250,17 @@ export class ApiClient {
             if (v === 'medium') return DebtSeverity.MEDIUM;
             return DebtSeverity.LOW;
         };
+        const parseMetadata = (value: any) => {
+            if (!value) return undefined;
+            if (typeof value === 'string') {
+                try {
+                    return JSON.parse(value);
+                } catch (e) {
+                    return undefined;
+                }
+            }
+            return value as Record<string, any>;
+        };
         return (Array.isArray(raw) ? raw : []).map((d: any): DebtItem => ({
             id: String(d.id),
             projectId: String(projectId),
@@ -259,7 +270,21 @@ export class ApiClient {
             description: d.message ?? d.description ?? '',
             estimatedEffort: 0,
             status: mapStatusFromServer(d.status),
-            metadata: d.line ? { location: { line: Number(d.line) || 1 } } : undefined,
+            metadata: (() => {
+                const metadata = parseMetadata(d.metadata ?? d.project_metadata);
+                if (metadata && typeof metadata === 'object') {
+                    if (!metadata.location && (d.line || metadata.line)) {
+                        const lineValue = Number(metadata.line ?? d.line);
+                        metadata.location = { line: Number.isFinite(lineValue) && lineValue > 0 ? lineValue : 1 };
+                    }
+                    return metadata;
+                }
+                const lineValue = Number(d.line);
+                if (Number.isFinite(lineValue) && lineValue > 0) {
+                    return { location: { line: lineValue } };
+                }
+                return undefined;
+            })(),
             createdAt: d.created_at ?? '',
             updatedAt: d.updated_at ?? ''
         }));
@@ -318,6 +343,17 @@ export class ApiClient {
     // 获取指定文件的债务。后端路由为 GET /debts/project/{project_id}，通过 query param file_path 过滤。
     async getFileDebts(projectId: string, filePath: string): Promise<DebtItem[]> {
         const raw: any = await (this.client as any).get(`/debts/project/${projectId}`, { params: { file_path: filePath } });
+        const parseMetadata = (value: any) => {
+            if (!value) return undefined;
+            if (typeof value === 'string') {
+                try {
+                    return JSON.parse(value);
+                } catch (e) {
+                    return undefined;
+                }
+            }
+            return value as Record<string, any>;
+        };
         return (Array.isArray(raw) ? raw : []).map((d: any): DebtItem => ({
             id: String(d.id),
             projectId: String(projectId),
@@ -327,7 +363,21 @@ export class ApiClient {
             description: d.message ?? d.description ?? '',
             estimatedEffort: 0,
             status: (String(d.status || 'open').toLowerCase() === 'ignored') ? DebtStatus.WONT_FIX : (d.status as DebtStatus),
-            metadata: d.line ? { location: { line: Number(d.line) || 1 } } : undefined,
+            metadata: (() => {
+                const metadata = parseMetadata(d.metadata ?? d.project_metadata);
+                if (metadata && typeof metadata === 'object') {
+                    if (!metadata.location && (d.line || metadata.line)) {
+                        const lineValue = Number(metadata.line ?? d.line);
+                        metadata.location = { line: Number.isFinite(lineValue) && lineValue > 0 ? lineValue : 1 };
+                    }
+                    return metadata;
+                }
+                const lineValue = Number(d.line);
+                if (Number.isFinite(lineValue) && lineValue > 0) {
+                    return { location: { line: lineValue } };
+                }
+                return undefined;
+            })(),
             createdAt: d.created_at ?? '',
             updatedAt: d.updated_at ?? ''
         }));

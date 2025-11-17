@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { ApiClient } from '../utils/apiClient';
 import { Project, DebtItem, DebtSummary, DebtStatus, DebtSeverity, DebtType } from '../../types';
@@ -30,8 +31,9 @@ export class DebtService {
             this.setCachedData(cacheKey, projects);
             return projects;
         } catch (error: any) {
-            this.logger.error('获取项目列表失败:', error.message);
-            throw new Error(`获取项目列表失败: ${error.message}`);
+            const detail = this.extractErrorMessage(error);
+            this.logger.error('获取项目列表失败:', detail);
+            throw new Error(`获取项目列表失败: ${detail}`);
         }
     }
 
@@ -40,8 +42,33 @@ export class DebtService {
      */
     async getProjectByPath(localPath: string): Promise<Project | null> {
         try {
+            const direct = await this.apiClient.getProjectByPath(localPath);
+            if (direct) {
+                const raw: any = direct as any;
+                return {
+                    id: String(raw.id ?? raw.project_id ?? ''),
+                    name: raw.name ?? '',
+                    description: raw.description ?? '',
+                    repoUrl: raw.repo_url ?? raw.repoUrl ?? '',
+                    localPath: raw.localPath ?? raw.local_path ?? localPath,
+                    language: raw.language ?? 'unknown',
+                    createdAt: raw.created_at ?? raw.createdAt ?? '',
+                    updatedAt: raw.updated_at ?? raw.updatedAt ?? ''
+                };
+            }
+
             const projects = await this.getProjects();
-            return projects.find(project => project.localPath === localPath) || null;
+            const normalize = (value: string) => {
+                if (!value) {
+                    return '';
+                }
+                let normalized = value.replace(/\\/g, '/');
+                normalized = normalized.replace(/\/+/g, '/');
+                normalized = normalized.replace(/\/+$/g, '');
+                return normalized.toLowerCase();
+            };
+            const target = normalize(localPath);
+            return projects.find(project => normalize(project.localPath) === target) || null;
         } catch (error: any) {
             this.logger.error('根据路径获取项目失败:', error.message);
             return null;
@@ -163,20 +190,31 @@ export class DebtService {
      * 获取指定文件的债务
      */
     async getFileDebts(projectId: string, filePath: string): Promise<DebtItem[]> {
-        const cacheKey = `fileDebts:${projectId}:${filePath}`;
+        const lookup = await this.resolvePathForRequest(filePath);
+        if (!lookup) {
+            this.logger.debug('跳过获取缺失文件的技术债务', { projectId, filePath });
+            return [];
+        }
+
+        const cacheKey = `fileDebts:${projectId}:${lookup.request}`;
         const cached = this.getCachedData(cacheKey);
         if (cached) {
             return cached as DebtItem[];
         }
 
         try {
-            this.logger.info(`获取文件 ${filePath} 的债务...`);
-            const debts = await this.apiClient.getFileDebts(projectId, filePath);
-            this.setCachedData(cacheKey, debts);
-            return debts;
+            this.logger.info(`获取文件 ${lookup.request} 的债务...`);
+            const debts = await this.apiClient.getFileDebts(projectId, lookup.request);
+            const normalized = debts.map(debt => ({
+                ...debt,
+                filePath: this.resolveDebtFilePath(debt.filePath, lookup.absolute)
+            }));
+            this.setCachedData(cacheKey, normalized);
+            return normalized;
         } catch (error: any) {
-            this.logger.error(`获取文件 ${filePath} 的债务失败:`, error.message);
-            throw new Error(`获取文件债务失败: ${error.message}`);
+            const detail = this.extractErrorMessage(error);
+            this.logger.error(`获取文件 ${lookup.request} 的债务失败:`, detail);
+            throw new Error(`获取文件债务失败: ${detail}`);
         }
     }
 
@@ -346,6 +384,112 @@ export class DebtService {
     }
 
     // 私有方法
+
+    private extractErrorMessage(error: any): string {
+        if (!error) {
+            return '未知错误';
+        }
+
+        if (typeof error === 'string') {
+            return error;
+        }
+
+        const responseDetail = error?.response?.data?.detail || error?.response?.data?.message;
+        if (responseDetail) {
+            return responseDetail;
+        }
+
+        if (error?.message && error.message !== 'Error') {
+            return error.message;
+        }
+
+        const status = error?.response?.status;
+        const statusText = error?.response?.statusText;
+        if (status) {
+            return statusText ? `HTTP ${status} ${statusText}` : `HTTP ${status}`;
+        }
+
+        try {
+            return JSON.stringify(error);
+        } catch (serializationError) {
+            return String(error);
+        }
+    }
+
+    private async resolvePathForRequest(filePath: string): Promise<{ absolute: string; request: string } | null> {
+        if (!filePath) {
+            return null;
+        }
+
+        const normalizedInput = filePath.replace(/\\/g, '/');
+        const candidates: Array<{ absolute: string; base?: vscode.WorkspaceFolder }> = [];
+
+        if (path.isAbsolute(normalizedInput)) {
+            candidates.push({ absolute: path.normalize(normalizedInput) });
+        }
+
+        const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+        for (const folder of workspaceFolders) {
+            const absolute = path.normalize(path.join(folder.uri.fsPath, normalizedInput));
+            candidates.push({ absolute, base: folder });
+        }
+
+        for (const candidate of candidates) {
+            if (await this.pathExists(candidate.absolute)) {
+                const base = candidate.base ?? this.findContainingWorkspace(candidate.absolute);
+                const request = this.buildRequestPath(candidate.absolute, base);
+                return { absolute: candidate.absolute, request };
+            }
+        }
+
+        return null;
+    }
+
+    private buildRequestPath(absolutePath: string, base?: vscode.WorkspaceFolder): string {
+        const normalizedAbsolute = absolutePath.replace(/\\/g, '/');
+        if (base) {
+            const basePath = base.uri.fsPath.replace(/\\/g, '/');
+            if (normalizedAbsolute.toLowerCase().startsWith(basePath.toLowerCase())) {
+                const relative = normalizedAbsolute.slice(basePath.length).replace(/^\/+/, '');
+                if (relative) {
+                    return relative;
+                }
+            }
+        }
+        return normalizedAbsolute;
+    }
+
+    private resolveDebtFilePath(rawPath: string | undefined, fallbackAbsolute: string): string {
+        if (rawPath) {
+            const normalized = rawPath.replace(/\\/g, '/');
+            if (path.isAbsolute(normalized)) {
+                return path.normalize(normalized);
+            }
+
+            const base = this.findContainingWorkspace(fallbackAbsolute);
+            if (base) {
+                const candidate = path.normalize(path.join(base.uri.fsPath, normalized));
+                return candidate;
+            }
+        }
+        return path.normalize(fallbackAbsolute);
+    }
+
+    private findContainingWorkspace(absolutePath: string): vscode.WorkspaceFolder | undefined {
+        const normalizedAbsolute = absolutePath.replace(/\\/g, '/').toLowerCase();
+        return (vscode.workspace.workspaceFolders ?? []).find(folder =>
+            normalizedAbsolute.startsWith(folder.uri.fsPath.replace(/\\/g, '/').toLowerCase())
+        );
+    }
+
+    private async pathExists(candidatePath: string): Promise<boolean> {
+        try {
+            await vscode.workspace.fs.stat(vscode.Uri.file(candidatePath));
+            return true;
+        } catch {
+            return false;
+        }
+    }
 
     private getCachedData(key: string): any | null {
         const cached = this.cache.get(key);

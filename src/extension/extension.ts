@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { TechnicalDebtProvider } from './providers/technicalDebtProvider';
+import { TechnicalDebtProvider, ViewMode } from './providers/technicalDebtProvider';
 import { DebtCodeLensProvider } from './providers/codeLensProvider';
 import { DebtHoverProvider } from './providers/hoverProvider';
 import { DebtDecorator } from './decorators/debtDecorator';
@@ -12,7 +12,7 @@ import { Logger } from './utils/logger';
 import { ApiClient } from './utils/apiClient';
 import { DebtItem, DebtStatus, DebtSeverity } from '../types';
 // 新增文件级重写支持
-import { FileDebtIndex } from './services/fileDebtIndex';
+import { FileDebtIndex, FileDebt } from './services/fileDebtIndex';
 import { InlineDebtDecorator } from './decorators/inlineDebtDecorator';
 import { DebtCodeLensProviderNew } from './providers/debtCodeLensProviderNew';
 
@@ -29,9 +29,12 @@ export async function activate(context: vscode.ExtensionContext) {
     try {
         // 初始化服务
         const apiClient = new ApiClient();
-    const analysisService = new AnalysisService(context);
+        const analysisService = new AnalysisService(context);
         const debtService = new DebtService();
         const configManager = ConfigManager.getInstance();
+        const fileIndex = FileDebtIndex.getInstance();
+        const inlineDecorator = InlineDebtDecorator.getInstance();
+        const newLensProvider = new DebtCodeLensProviderNew();
 
         // 健康检查
         await performHealthCheck(apiClient);
@@ -41,16 +44,51 @@ export async function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(statusBarItem);
 
         // 初始化提供者
-        debtProvider = new TechnicalDebtProvider(context, debtService);
+        debtProvider = new TechnicalDebtProvider(fileIndex, debtService);
         codeLensProvider = new DebtCodeLensProvider();
         const hoverProvider = new DebtHoverProvider();
         debtDecorator = new DebtDecorator();
 
         // 注册树视图
+        const providerDisposable = vscode.window.registerTreeDataProvider('technicalDebtView', debtProvider);
+        context.subscriptions.push(providerDisposable);
         const debtTreeView = vscode.window.createTreeView('technicalDebtView', {
-            treeDataProvider: debtProvider
+            treeDataProvider: debtProvider,
+            showCollapseAll: true
         });
         context.subscriptions.push(debtTreeView);
+        const updateTreeViewMessage = () => {
+            const base = debtProvider.getViewMode() === ViewMode.FILE
+                ? '$(file-code) 当前文件视图 · 右键条目可标记或查看详情'
+                : '$(symbol-structure) 项目概览视图 · 右键条目可跳转或更新状态';
+            debtTreeView.message = base;
+        };
+        updateTreeViewMessage();
+        const focusSidebar = async () => {
+            try {
+                await vscode.commands.executeCommand('workbench.view.extension.technicalDebtSidebar');
+                await vscode.commands.executeCommand('technicalDebtView.focus');
+            } catch (error: any) {
+                logger.warn('无法自动聚焦技术债务侧栏: ' + (error?.message || error));
+            }
+        };
+
+        context.subscriptions.push(vscode.commands.registerCommand('technicalDebt.openSidebar', async () => {
+            await focusSidebar();
+        }));
+
+        context.subscriptions.push(vscode.commands.registerCommand('technicalDebt.switchViewMode', async (target?: ViewMode) => {
+            const nextMode = target || (debtProvider.getViewMode() === ViewMode.FILE ? ViewMode.WORKSPACE : ViewMode.FILE);
+            debtProvider.setViewMode(nextMode);
+            updateTreeViewMessage();
+            if (nextMode === ViewMode.WORKSPACE) {
+                await focusSidebar();
+            }
+        }));
+
+        await focusSidebar();
+        context.subscriptions.push(fileIndex.onDidChange(() => debtProvider.refresh()));
+        context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(() => debtProvider.refresh()));
 
         // 注册命令 - 旧模式
         const commands = registerCommands(context, analysisService, debtService, debtProvider);
@@ -64,47 +102,139 @@ export async function activate(context: vscode.ExtensionContext) {
         const eventListeners = registerEventListeners(context, debtDecorator, debtProvider, codeLensProvider, debtService);
         context.subscriptions.push(...eventListeners);
 
-        // 配置变化监听
-        const configChangeListener = configManager.onConfigChange(() => {
-            logger.info('配置已更新，重新加载装饰器');
-            debtDecorator.updateDecorationsForActiveEditor();
-            codeLensProvider.refresh();
-            updateStatusBar(statusBarItem, debtService);
-        });
-        context.subscriptions.push(configChangeListener);
-
         // 初始更新（旧模式）
         await updateStatusBar(statusBarItem, debtService);
         debtDecorator.updateDecorationsForActiveEditor();
 
         // ===================== 新文件级模式初始化 =====================
-        const fileIndex = FileDebtIndex.getInstance();
-        const inlineDecorator = InlineDebtDecorator.getInstance();
-        const newLensProvider = new DebtCodeLensProviderNew();
         context.subscriptions.push(vscode.languages.registerCodeLensProvider({ scheme: 'file' }, newLensProvider));
+        context.subscriptions.push(new vscode.Disposable(() => fileIndex.dispose()));
 
-        async function refreshActive(forceScan = false) {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) return;
-            if (forceScan) await fileIndex.scanFile(editor.document, true);
-            inlineDecorator.refreshActiveEditor(forceScan);
-            newLensProvider.refresh();
+        let refreshTimerHandle: NodeJS.Timeout | undefined;
+        let autoRefreshRunning = false;
+        let lastIntervalSeconds = -1;
+
+        const scheduleAutoRefresh = () => {
+            const intervalSecondsRaw = configManager.getConfig().analysis.refreshInterval;
+            const intervalSeconds = Math.max(0, Math.floor(intervalSecondsRaw));
+            if (refreshTimerHandle) {
+                clearInterval(refreshTimerHandle);
+                refreshTimerHandle = undefined;
+            }
+            if (!intervalSeconds) {
+                if (lastIntervalSeconds > 0) {
+                    logger.info('技术债务自动刷新已禁用');
+                }
+                lastIntervalSeconds = 0;
+                return;
+            }
+            const intervalMs = Math.max(10, intervalSeconds) * 1000;
+            if (lastIntervalSeconds !== intervalSeconds) {
+                logger.info(`已启用技术债务自动刷新，间隔 ${intervalSeconds}s`);
+            }
+            lastIntervalSeconds = intervalSeconds;
+            refreshTimerHandle = setInterval(async () => {
+                if (autoRefreshRunning) {
+                    return;
+                }
+                if (!vscode.workspace.workspaceFolders?.length) {
+                    return;
+                }
+                autoRefreshRunning = true;
+                try {
+                    await fileIndex.refreshAllCached(true);
+                    await inlineDecorator.refreshActiveEditor();
+                    newLensProvider.refresh();
+                    debtProvider.refresh();
+                } catch (err: any) {
+                    logger.warn('自动刷新技术债务失败: ' + (err?.message || err));
+                } finally {
+                    autoRefreshRunning = false;
+                }
+            }, intervalMs);
+        };
+
+        scheduleAutoRefresh();
+        context.subscriptions.push(new vscode.Disposable(() => {
+            if (refreshTimerHandle) {
+                clearInterval(refreshTimerHandle);
+                refreshTimerHandle = undefined;
+            }
+        }));
+
+        function resolveFileDebt(target: any): FileDebt | undefined {
+            if (!target) {
+                return undefined;
+            }
+            if ((target as FileDebt).filePath && typeof (target as FileDebt).line === 'number') {
+                return target as FileDebt;
+            }
+            if (target.debt) {
+                return resolveFileDebt(target.debt);
+            }
+            if (Array.isArray(target)) {
+                return resolveFileDebt(target[0]);
+            }
+            return undefined;
         }
 
-        async function updateDebtAndRefresh(d: any, status: DebtStatus) {
-            if (!d) return;
-            const ok = await fileIndex.updateDebtStatus(d, status);
+        async function resolveDocumentFromTarget(target: any): Promise<vscode.TextDocument | undefined> {
+            try {
+                if (target?.filePath) {
+                    return await vscode.workspace.openTextDocument(vscode.Uri.file(target.filePath));
+                }
+                const debt = resolveFileDebt(target);
+                if (debt?.filePath) {
+                    return await vscode.workspace.openTextDocument(vscode.Uri.file(debt.filePath));
+                }
+            } catch (error: any) {
+                vscode.window.showErrorMessage('无法打开文件: ' + (error?.message || error));
+                return undefined;
+            }
+            return vscode.window.activeTextEditor?.document;
+        }
+
+        async function refreshActive(forceScan = false) {
+            const activeEditor = vscode.window.activeTextEditor;
+            if (!activeEditor) {
+                return;
+            }
+            await inlineDecorator.refreshActiveEditor(forceScan);
+            newLensProvider.refresh();
+            debtProvider.refresh();
+        }
+
+        async function updateDebtAndRefresh(target: any, status: DebtStatus) {
+            const debt = resolveFileDebt(target);
+            if (!debt) {
+                vscode.window.showErrorMessage('无法识别要更新的技术债务项');
+                return;
+            }
+            const ok = await fileIndex.updateDebtStatus(debt, status);
             if (ok) {
                 await refreshActive(true);
+                debtProvider.refresh();
             } else {
                 vscode.window.showErrorMessage('更新债务状态失败');
             }
         }
 
         // 新命令注册
-        context.subscriptions.push(vscode.commands.registerCommand('technicalDebt.scanFile', async () => {
-            await refreshActive(true);
-            vscode.window.showInformationMessage('文件技术债务扫描完成');
+        context.subscriptions.push(vscode.commands.registerCommand('technicalDebt.scanFile', async (target) => {
+            const doc = await resolveDocumentFromTarget(target);
+            if (!doc) {
+                vscode.window.showInformationMessage('无可扫描的文件');
+                return;
+            }
+            await fileIndex.scanFile(doc, true);
+            const activeDoc = vscode.window.activeTextEditor?.document;
+            if (activeDoc && activeDoc.uri.toString() === doc.uri.toString()) {
+                await refreshActive(false);
+            } else {
+                debtProvider.refresh();
+            }
+            const fileName = require('path').basename(doc.fileName);
+            vscode.window.showInformationMessage(`${fileName} 的技术债务扫描完成`);
         }));
 
         context.subscriptions.push(vscode.commands.registerCommand('technicalDebt.toggleInlineDebts', () => {
@@ -123,11 +253,15 @@ export async function activate(context: vscode.ExtensionContext) {
             vscode.window.showInformationMessage('缓存的技术债务已刷新');
         }));
 
-        context.subscriptions.push(vscode.commands.registerCommand('technicalDebt.showFileDebts', async () => {
-            const editor = vscode.window.activeTextEditor;
-            if (!editor) return vscode.window.showInformationMessage('无活动文件');
-            const debts = fileIndex.getCachedFileDebts(editor.document);
-            if (!debts.length) return vscode.window.showInformationMessage('当前文件暂无缓存的技术债务，可先扫描');
+        context.subscriptions.push(vscode.commands.registerCommand('technicalDebt.showFileDebts', async (target) => {
+            const doc = await resolveDocumentFromTarget(target);
+            if (!doc) {
+                return vscode.window.showInformationMessage('无可查看的文件');
+            }
+            const debts = fileIndex.getCachedFileDebts(doc);
+            if (!debts.length) {
+                return vscode.window.showInformationMessage('当前文件暂无缓存的技术债务，可先扫描');
+            }
             const pick = await vscode.window.showQuickPick(debts.map(d => ({
                 label: `${d.severity} ${d.status} @${d.line}`,
                 description: d.description.slice(0,60),
@@ -135,6 +269,8 @@ export async function activate(context: vscode.ExtensionContext) {
                 debt: d
             })), { placeHolder: '选择一个技术债务以跳转或更新状态' });
             if (pick && pick.debt) {
+                const document = await vscode.workspace.openTextDocument(vscode.Uri.file(pick.debt.filePath));
+                const editor = await vscode.window.showTextDocument(document);
                 const pos = new vscode.Position(Math.max(0, pick.debt.line - 1), 0);
                 editor.selection = new vscode.Selection(pos, pos);
                 editor.revealRange(new vscode.Range(pos, pos), vscode.TextEditorRevealType.InCenter);
@@ -145,6 +281,25 @@ export async function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(vscode.commands.registerCommand('technicalDebt.markDebt.resolved', async (d) => updateDebtAndRefresh(d, DebtStatus.RESOLVED)));
         context.subscriptions.push(vscode.commands.registerCommand('technicalDebt.markDebt.ignored', async (d) => updateDebtAndRefresh(d, DebtStatus.WONT_FIX)));
 
+        context.subscriptions.push(vscode.commands.registerCommand('technicalDebt.revealDebtInEditor', async (target) => {
+            const debt = resolveFileDebt(target);
+            if (!debt) {
+                vscode.window.showErrorMessage('无法打开技术债务对应的位置');
+                return;
+            }
+            try {
+                const document = await vscode.workspace.openTextDocument(vscode.Uri.file(debt.filePath));
+                const editor = await vscode.window.showTextDocument(document);
+                const position = new vscode.Position(Math.max(0, (debt.line ?? 1) - 1), 0);
+                editor.selection = new vscode.Selection(position, position);
+                editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+                inlineDecorator.refreshActiveEditor();
+                newLensProvider.refresh();
+            } catch (error: any) {
+                vscode.window.showErrorMessage('打开文件失败: ' + (error?.message || error));
+            }
+        }));
+
         // 聚合工作区文件债务（仅已扫描缓存）
         context.subscriptions.push(vscode.commands.registerCommand('technicalDebt.openDebtQuickPanel', async () => {
             const all = fileIndex.aggregateWorkspaceDebts();
@@ -152,29 +307,56 @@ export async function activate(context: vscode.ExtensionContext) {
                 vscode.window.showInformationMessage('尚无已扫描文件的技术债务，打开文件并执行“技术债务: 扫描当前文件”。');
                 return;
             }
-            const severityFilter = await vscode.window.showInputBox({
-                prompt: '输入 severity 过滤 (low|medium|high|critical) 或留空显示全部',
-                placeHolder: '例如: high'
-            });
-            let filtered = all;
-            if (severityFilter) {
-                const sf = severityFilter.trim().toLowerCase();
-                filtered = all.filter(d => d.severity.toLowerCase() === sf);
-                if (!filtered.length) {
-                    vscode.window.showWarningMessage(`无匹配 severity=${sf} 的技术债务`);
-                    return;
+            const severityOptions = await vscode.window.showQuickPick(
+                [
+                    { label: DebtSeverity.CRITICAL, description: '只查看 critical 级别' },
+                    { label: DebtSeverity.HIGH, description: '只查看 high 级别' },
+                    { label: DebtSeverity.MEDIUM, description: '只查看 medium 级别' },
+                    { label: DebtSeverity.LOW, description: '只查看 low 级别' }
+                ],
+                {
+                    canPickMany: true,
+                    placeHolder: '选择要筛选的严重程度（留空表示全部）'
                 }
+            );
+
+            const severitySet = new Set((severityOptions || []).map(opt => opt.label.toLowerCase()));
+            let filtered = severitySet.size ? all.filter(d => severitySet.has(String(d.severity).toLowerCase())) : all;
+
+            const keywordInput = await vscode.window.showInputBox({
+                prompt: '输入关键字（多个关键字用空格分隔），留空表示不过滤',
+                placeHolder: '例如: cache 超时'
+            });
+            const keywords = keywordInput ? keywordInput.split(/\s+/).map(k => k.trim().toLowerCase()).filter(Boolean) : [];
+            if (keywords.length) {
+                filtered = filtered.filter(d => {
+                    const haystack = `${d.filePath} ${d.description ?? ''} ${d.status ?? ''}`.toLowerCase();
+                    return keywords.every(kw => haystack.includes(kw));
+                });
             }
+
+            if (!filtered.length) {
+                vscode.window.showWarningMessage('没有符合条件的技术债务，请调整筛选条件。');
+                return;
+            }
+
             const items = filtered.map(d => {
                 const fileName = require('path').basename(d.filePath);
+                const severityLabel = String(d.severity).toUpperCase();
+                const detailStatus = d.status ? `状态: ${d.status}` : undefined;
                 return {
-                    label: `[${d.severity}] ${fileName}:${d.line}`,
-                    description: d.description.slice(0, 80),
-                    detail: d.status,
+                    label: `[${severityLabel}] ${fileName}:${d.line}`,
+                    description: (d.description || '').slice(0, 80),
+                    detail: detailStatus,
                     debt: d
                 } as vscode.QuickPickItem & { debt: any };
             });
-            const picked = await vscode.window.showQuickPick(items, { matchOnDescription: true, placeHolder: '选择债务跳转或更新状态' });
+
+            const picked = await vscode.window.showQuickPick(items, {
+                matchOnDescription: true,
+                matchOnDetail: true,
+                placeHolder: '选择债务跳转或更新状态'
+            });
             if (picked && (picked as any).debt) {
                 const d = (picked as any).debt;
                 const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(d.filePath));
@@ -202,12 +384,23 @@ export async function activate(context: vscode.ExtensionContext) {
                 inlineDecorator.refreshActiveEditor();
                 newLensProvider.refresh();
             }
+            debtProvider.refresh();
         }));
         context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(async (editor) => {
             if (!editor) return;
             inlineDecorator.refreshActiveEditor();
             newLensProvider.refresh();
+            debtProvider.refresh();
         }));
+
+        const configChangeListener = configManager.onConfigChange(() => {
+            logger.info('配置已更新，重新加载装饰器');
+            debtDecorator.updateDecorationsForActiveEditor();
+            codeLensProvider.refresh();
+            updateStatusBar(statusBarItem, debtService);
+            scheduleAutoRefresh();
+        });
+        context.subscriptions.push(configChangeListener);
         // =============================================================
 
         logger.info('Technical Debt Manager 插件初始化完成');
@@ -247,7 +440,7 @@ function createStatusBarItem(): vscode.StatusBarItem {
     const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     item.text = '$(warning) 技术债务';
     item.tooltip = '查看技术债务分析';
-    item.command = 'technicalDebt.showDashboard';
+    item.command = 'technicalDebt.openSidebar';
     item.show();
     return item;
 }

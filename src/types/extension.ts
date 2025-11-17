@@ -10,6 +10,7 @@ export interface ExtensionConfig {
         autoAnalyzeOnSave: boolean;
         excludedPatterns: string[];
         maxFileSize: number;
+        refreshInterval: number;
     };
     ui: {
         showStatusBar: boolean;

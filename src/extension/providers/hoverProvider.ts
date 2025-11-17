@@ -11,6 +11,10 @@ export class DebtHoverProvider implements vscode.HoverProvider {
 
     async provideHover(document: vscode.TextDocument, position: vscode.Position): Promise<vscode.Hover | null> {
         try {
+            if (document.uri.scheme !== 'file') {
+                return null;
+            }
+
             const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
             if (!workspaceFolder) {
                 return null;
@@ -57,9 +61,18 @@ export class DebtHoverProvider implements vscode.HoverProvider {
 
         content.appendMarkdown('### 🚨 技术债务\n\n');
 
+        const encodeArgs = (value: DebtItem) => {
+            try {
+                return encodeURIComponent(JSON.stringify([value]));
+            } catch {
+                return encodeURIComponent(JSON.stringify([ { id: value.id } ]));
+            }
+        };
+
         debts.forEach((debt, index) => {
             const severityIcon = this.getSeverityIcon(debt.severity);
             const statusIcon = this.getStatusIcon(debt.status);
+            const encodedArgs = encodeArgs(debt);
 
             content.appendMarkdown(`**${severityIcon} ${debt.debtType.toUpperCase()}** ${statusIcon}\n\n`);
             content.appendMarkdown(`${debt.description}\n\n`);
@@ -70,13 +83,14 @@ export class DebtHoverProvider implements vscode.HoverProvider {
                 content.appendMarkdown(`- **修复建议**: ${debt.metadata.suggestion}\n`);
             }
 
+            content.appendMarkdown(`\n[查看详情](command:technicalDebt.showDebtDetails?${encodedArgs}) | `);
+            content.appendMarkdown(`[标记为处理中](command:technicalDebt.markAsInProgress?${encodedArgs}) | `);
+            content.appendMarkdown(`[标记为已解决](command:technicalDebt.markAsResolved?${encodedArgs})\n`);
+
             if (index < debts.length - 1) {
                 content.appendMarkdown('\n---\n\n');
             }
         });
-
-        content.appendMarkdown('\n---\n\n');
-        content.appendMarkdown('[查看详情](command:technicalDebt.showDebtDetails) | [标记为处理中](command:technicalDebt.markAsInProgress)');
 
         return content;
     }

@@ -1,52 +1,36 @@
+import { Buffer } from 'buffer';
+import minimatch from 'minimatch';
 import * as vscode from 'vscode';
+import { AnalysisResult, DebtItem, Project } from '../../types';
 import { ApiClient } from '../utils/apiClient';
 import { ConfigManager } from '../utils/configManager';
-import { AnalysisResult, DebtItem } from '../../types';
 import { Logger } from '../utils/logger';
 
+interface EnsureProjectResult {
+    project: Project;
+    created: boolean;
+}
+
 export class AnalysisService {
-    private apiClient: ApiClient;
-    private configManager: ConfigManager;
-    private logger: Logger;
-    // map of projectId -> analysisId
-    private currentAnalysis: Map<string, string> = new Map();
-    private clientId: string;
-    private context?: vscode.ExtensionContext;
+    private readonly apiClient: ApiClient;
+    private readonly configManager: ConfigManager;
+    private readonly logger: Logger;
+    private readonly currentAnalysis: Map<string, string> = new Map();
+    private readonly clientId: string;
+    private readonly context?: vscode.ExtensionContext;
 
     constructor(context?: vscode.ExtensionContext) {
         this.apiClient = new ApiClient();
         this.configManager = ConfigManager.getInstance();
         this.logger = Logger.getInstance();
         this.context = context;
-
-        // client id persisted in global state so locks and idempotency work across sessions
-        try {
-            const stored = context?.globalState.get<string>('tdm.clientId');
-            if (stored) {
-                this.clientId = stored;
-            } else {
-                this.clientId = this.generateClientId();
-                context?.globalState.update('tdm.clientId', this.clientId);
-            }
-        } catch (e) {
-            // fallback
-            this.clientId = this.generateClientId();
-        }
-    }
-
-    private generateClientId(): string {
-        // simple UUID v4-ish generator
-        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-            const r = (Math.random() * 16) | 0;
-            const v = c === 'x' ? r : (r & 0x3) | 0x8;
-            return v.toString(16);
-        });
+        this.clientId = this.restoreClientId();
     }
 
     async analyzeWorkspace(): Promise<AnalysisResult | null> {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (!workspaceFolder) {
-            vscode.window.showErrorMessage('请先打开一个工作区');
+            vscode.window.showErrorMessage('请先打开一个工作区，再运行项目分析。');
             return null;
         }
 
@@ -56,194 +40,250 @@ export class AnalysisService {
     async analyzeProject(projectPath: string): Promise<AnalysisResult | null> {
         try {
             this.logger.info(`开始分析项目: ${projectPath}`);
-            // 检查项目是否已存在（尝试专用 by-path 接口，失败则回退到列出所有项目）
-            let project = await this.apiClient.getProjectByPath(projectPath);
+            const ensureResult = await this.ensureProject(projectPath);
 
-            if (!project) {
-                // 创建新项目，使用幂等 Key（基于 projectPath），以避免重复创建
-                const idempotencyKey = `tdm:${Buffer.from(projectPath).toString('base64')}`;
-                project = await this.apiClient.createProjectIdempotent({
-                    name: this.getProjectName(projectPath),
-                    localPath: projectPath,
-                    language: await this.detectProjectLanguage(projectPath)
-                }, idempotencyKey);
-                this.logger.info(`创建或获取项目: ${project.name}`);
+            const current = await this.safeGetProjectCurrent(ensureResult.project.id);
+            if (this.isAnalysisRunning(current)) {
+                vscode.window.showInformationMessage('项目已经有正在运行的分析任务，已取消重复触发。');
+                return null;
             }
 
-            // 注意: 后端已改为在触发分析时自动加锁并在处理完成后自动解锁。
-            // 前端不再显式请求锁，直接继续触发分析。
-
-            // 检查是否已有正在运行的分析，避免重复触发
-            try {
-                const current = await this.apiClient.getProjectCurrent(project.id);
-                if (current && current.current_analysis_id && ['running','analyzing','started'].includes((current.status || '').toString())) {
-                    this.logger.info(`项目已有正在运行的分析: ${current.current_analysis_id}`);
-                    vscode.window.showInformationMessage('项目已有正在运行的分析，已取消重复触发');
-                    return null;
-                }
-            } catch (e) {
-                // 如果获取 current 失败，继续尝试触发分析（谨慎）
-                this.logger.warn('获取项目当前分析信息失败，继续触发分析');
-            }
-
-            // 触发分析 — 使用项目 ID（后端路径为 /projects/{project_id}/analysis）
-            const analysisResult = await this.apiClient.triggerAnalysis(project.id);
-            const analysisId = (analysisResult as any).analysis_id || (analysisResult as any).task_id || (analysisResult as any).id || (analysisResult as any).taskId;
+            const analysisResult = await this.apiClient.triggerAnalysis(ensureResult.project.id);
+            const analysisId = this.extractAnalysisId(analysisResult);
             if (analysisId) {
-                this.currentAnalysis.set(project.id, analysisId);
-                // 启动进度监控（传入 project.id 以便查询状态时使用正确路径）
-                this.monitorAnalysisProgress(analysisId, project.id).catch(() => {});
+                this.currentAnalysis.set(ensureResult.project.id, analysisId);
+                this.monitorAnalysisProgress(analysisId, ensureResult.project.id).catch(() => undefined);
             }
 
             return analysisResult;
-        } catch (error) {
-            this.logger.error(`分析项目失败: ${error.message}`);
-            vscode.window.showErrorMessage(`分析失败: ${error.message}`);
+        } catch (error: any) {
+            this.logger.error('分析项目失败', error);
+            vscode.window.showErrorMessage(`分析项目失败: ${error?.message || '未知错误'}`);
             return null;
         }
     }
 
     async analyzeFile(filePath: string): Promise<DebtItem[] | null> {
         const config = this.configManager.getConfig();
-
-        // 检查文件是否在排除模式中
         if (this.isFileExcluded(filePath, config.analysis.excludedPatterns)) {
+            this.logger.debug('文件命中排除规则，跳过分析', { filePath });
             return null;
         }
 
-        // 检查文件大小
         if (await this.isFileTooLarge(filePath, config.analysis.maxFileSize)) {
-            this.logger.warn(`文件过大，跳过分析: ${filePath}`);
+            this.logger.warn('文件过大，跳过分析', { filePath });
             return null;
         }
 
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (!workspaceFolder) {
+            this.logger.warn('未找到工作区，无法执行文件分析');
             return null;
         }
 
         try {
-            const relativePath = vscode.workspace.asRelativePath(filePath);
+            const ensureResult = await this.ensureProject(workspaceFolder.uri.fsPath);
+            const relativePath = vscode.workspace.asRelativePath(filePath).replace(/\\/g, '/');
 
-            // 先获取对应的 project（根据 workspace path）以取得 project.id
-            // 获取或创建 project
-            let project = await this.apiClient.getProjectByPath(workspaceFolder.uri.fsPath);
-            if (!project) {
-                const idempotencyKey = `tdm:${Buffer.from(workspaceFolder.uri.fsPath).toString('base64')}`;
-                project = await this.apiClient.createProjectIdempotent({
-                    name: this.getProjectName(workspaceFolder.uri.fsPath),
-                    localPath: workspaceFolder.uri.fsPath,
-                    language: await this.detectProjectLanguage(workspaceFolder.uri.fsPath)
-                }, idempotencyKey);
+            const triggerResult = await this.apiClient.triggerAnalysis(ensureResult.project.id, relativePath);
+            const analysisId = this.extractAnalysisId(triggerResult);
+            if (!analysisId) {
+                throw new Error('后端未返回分析任务 ID');
             }
 
-            // 注意: 后端会在处理期间自动加锁，前端不再向后端发起显式加锁请求。
-
-            const analysisResult = await this.apiClient.triggerAnalysis(project.id, relativePath);
-
-            // 等待分析完成并获取债务数据
-            const analysisId = (analysisResult as any).analysis_id || (analysisResult as any).task_id || (analysisResult as any).id || (analysisResult as any).taskId;
-            const debts = await this.waitForFileAnalysis(analysisId, relativePath, project.id);
-
-            // 后端将自动在处理完成时解锁；前端无需显式解锁。
-
-            return debts;
-        } catch (error) {
-            this.logger.error(`分析文件失败: ${error.message}`);
+            return await this.waitForFileAnalysis(analysisId, relativePath, ensureResult.project.id);
+        } catch (error: any) {
+            this.logger.error('分析文件失败', error);
+            vscode.window.showErrorMessage(`分析文件失败: ${error?.message || '未知错误'}`);
             return null;
         }
     }
 
+    getCurrentAnalysis(projectId: string): string | undefined {
+        return this.currentAnalysis.get(projectId);
+    }
+
+    private restoreClientId(): string {
+        const fallback = this.generateClientId();
+        try {
+            const stored = this.context?.globalState.get<string>('tdm.clientId');
+            if (stored) {
+                return stored;
+            }
+            this.context?.globalState.update('tdm.clientId', fallback);
+            return fallback;
+        } catch (error) {
+            this.logger.warn('恢复客户端 ID 失败，使用新的 ID', error);
+            return fallback;
+        }
+    }
+
+    private generateClientId(): string {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = (Math.random() * 16) | 0;
+            const v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+        });
+    }
+
+    private async ensureProject(projectPath: string): Promise<EnsureProjectResult> {
+        const existingRaw = await this.apiClient.getProjectByPath(projectPath).catch(() => null);
+        const existing = this.normalizeProject(existingRaw);
+        if (existing) {
+            return { project: existing, created: false };
+        }
+
+        const payload = {
+            name: this.getProjectName(projectPath),
+            localPath: projectPath,
+            language: await this.detectProjectLanguage(projectPath)
+        };
+        const idempotencyKey = `tdm:${Buffer.from(projectPath).toString('base64')}`;
+        const createdRaw = await this.apiClient.createProjectIdempotent(payload, idempotencyKey);
+        const project = this.normalizeProject(createdRaw);
+        if (!project) {
+            throw new Error('项目创建成功但返回数据格式异常');
+        }
+
+        vscode.window.showInformationMessage(`已创建项目「${project.name}」，即将开始分析。`);
+        return { project, created: true };
+    }
+
+    private normalizeProject(raw: any): Project | null {
+        if (!raw) {
+            return null;
+        }
+
+        const project: Project = {
+            id: String(raw.id ?? raw.project_id ?? ''),
+            name: raw.name ?? '',
+            description: raw.description ?? '',
+            repoUrl: raw.repo_url ?? raw.repoUrl ?? '',
+            localPath: raw.localPath ?? raw.local_path ?? '',
+            language: raw.language ?? 'unknown',
+            createdAt: raw.created_at ?? raw.createdAt ?? '',
+            updatedAt: raw.updated_at ?? raw.updatedAt ?? ''
+        };
+
+        if (!project.id || !project.localPath) {
+            return null;
+        }
+
+        return project;
+    }
+
+    private async safeGetProjectCurrent(projectId: string): Promise<any> {
+        try {
+            return await this.apiClient.getProjectCurrent(projectId);
+        } catch (error) {
+            this.logger.warn('获取项目当前分析状态失败，忽略继续执行', error);
+            return null;
+        }
+    }
+
+    private isAnalysisRunning(current: any): boolean {
+        if (!current) {
+            return false;
+        }
+
+        const status = String(current.status ?? '').toLowerCase();
+        return ['running', 'analyzing', 'started'].includes(status);
+    }
+
+    private extractAnalysisId(result: any): string | null {
+        if (!result) {
+            return null;
+        }
+
+        return (
+            result.analysis_id ||
+            result.analysisId ||
+            result.task_id ||
+            result.taskId ||
+            result.id ||
+            null
+        );
+    }
+
     private async monitorAnalysisProgress(analysisId: string, projectId: string): Promise<void> {
-        const progressOptions = {
+        const progressOptions: vscode.ProgressOptions = {
             location: vscode.ProgressLocation.Notification,
-            title: "分析技术债务",
+            title: '技术债务分析',
             cancellable: true
         };
 
         await vscode.window.withProgress(progressOptions, async (progress, token) => {
+            let completed = false;
+            let retries = 0;
+            const maxRetries = 30;
+
             token.onCancellationRequested(() => {
-                this.logger.info('用户取消了分析');
+                this.logger.info('用户取消了分析进度跟踪');
             });
 
-            let isCompleted = false;
-            let retryCount = 0;
-            const maxRetries = 30; // 5分钟超时
-
-            while (!isCompleted && retryCount < maxRetries && !token.isCancellationRequested) {
+            while (!completed && retries < maxRetries && !token.isCancellationRequested) {
                 try {
                     const status = await this.apiClient.getAnalysisStatus(projectId, analysisId);
+                    const phase = String(status.status || '').toLowerCase();
 
-                    // 如果后端直接返回 4xx 错误（例如 400 表示无效的 analysisId），将其视为终止条件，避免无限轮询
-                    // 注意：axios 在响应拦截器中会将非 2xx 的响应抛出为异常，因此大多数 4xx 会进入 catch 分支下面。
-                    switch (status.status) {
-                        case 'completed':
-                            isCompleted = true;
-                            progress.report({ increment: 100, message: '分析完成' });
-                            vscode.window.showInformationMessage('技术债务分析完成');
-                            break;
-                        case 'failed':
-                            isCompleted = true;
-                            progress.report({ increment: 100, message: '分析失败' });
-                            vscode.window.showErrorMessage('技术债务分析失败');
-                            break;
-                        case 'running':
-                            progress.report({
-                                increment: 10,
-                                message: '分析中...'
-                            });
-                            break;
+                    if (phase === 'completed') {
+                        progress.report({ increment: 100, message: '分析完成' });
+                        vscode.window.showInformationMessage('项目分析已完成。');
+                        completed = true;
+                    } else if (phase === 'failed') {
+                        progress.report({ increment: 100, message: '分析失败' });
+                        vscode.window.showErrorMessage('项目分析失败，请稍后重试。');
+                        completed = true;
+                    } else {
+                        progress.report({ increment: 5, message: '分析进行中...' });
+                        await this.delay(5000);
+                        retries += 1;
                     }
-
-                    if (!isCompleted) {
-                        await new Promise(resolve => setTimeout(resolve, 5000)); // 5秒轮询
-                        retryCount++;
-                    }
-                } catch (error) {
-                    // 如果是 HTTP 错误并且状态码位于 400-499，通常表示请求不正确或资源不存在，停止轮询并告知用户
+                } catch (error: any) {
                     const statusCode = error?.response?.status;
                     if (statusCode && statusCode >= 400 && statusCode < 500) {
-                        this.logger.error(`检查分析状态失败（客户端错误 ${statusCode}），停止轮询: ${error.message}`);
-                        vscode.window.showErrorMessage(`无法获取分析状态（${statusCode}）: ${error?.response?.data?.detail || error.message}`);
+                        this.logger.error('获取分析状态失败，停止查询', error);
+                        vscode.window.showErrorMessage(`获取分析状态失败: ${statusCode}`);
                         break;
                     }
 
-                    this.logger.error(`检查分析状态失败: ${error.message}`);
-                    retryCount++;
-                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    this.logger.warn('获取分析状态失败，重试', error);
+                    retries += 1;
+                    await this.delay(5000);
                 }
             }
 
-            if (retryCount >= maxRetries) {
-                vscode.window.showWarningMessage('分析超时，请稍后查看结果');
+            if (!completed && retries >= maxRetries) {
+                vscode.window.showWarningMessage('分析进度查询超时，请稍后查看结果。');
             }
 
-            // 删除基于 projectId 的当前分析记录
             this.currentAnalysis.delete(projectId);
-            // 注意：后端现在负责在处理完成后自动解锁，前端不再尝试显式解锁。
         });
     }
 
     private async waitForFileAnalysis(analysisId: string, filePath: string, projectId: string): Promise<DebtItem[]> {
-        let retryCount = 0;
-        const maxRetries = 12; // 1分钟超时
+        let retries = 0;
+        const maxRetries = 12;
 
-        while (retryCount < maxRetries) {
+        while (retries < maxRetries) {
             try {
                 const status = await this.apiClient.getAnalysisStatus(projectId, analysisId);
+                const phase = String(status.status || '').toLowerCase();
 
-                if (status.status === 'completed') {
+                if (phase === 'completed') {
                     return await this.apiClient.getFileDebts(projectId, filePath);
-                } else if (status.status === 'failed') {
+                }
+
+                if (phase === 'failed') {
                     throw new Error('文件分析失败');
                 }
 
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                retryCount++;
+                await this.delay(5000);
+                retries += 1;
             } catch (error: any) {
-                this.logger.error(`等待文件分析完成失败: ${error.message}`);
-                retryCount++;
-                await new Promise(resolve => setTimeout(resolve, 5000));
+                this.logger.warn('等待文件分析结果失败，重试', error);
+                retries += 1;
+                await this.delay(5000);
             }
         }
 
@@ -251,26 +291,36 @@ export class AnalysisService {
     }
 
     private getProjectName(projectPath: string): string {
-        return projectPath.split(/[\\/]/).pop() || 'Unknown Project';
+        const parts = projectPath.split(/[\\/]/);
+        return parts.pop() || 'Unknown Project';
     }
 
     private async detectProjectLanguage(projectPath: string): Promise<string> {
-        if ((await vscode.workspace.findFiles('package.json')).length > 0) {
-            return 'javascript';
-        } else if ((await vscode.workspace.findFiles('requirements.txt')).length > 0) {
-            return 'python';
-        } else if ((await vscode.workspace.findFiles('pom.xml')).length > 0) {
-            return 'java';
-        } else {
+        const folder = vscode.workspace.workspaceFolders?.find((f) => f.uri.fsPath === projectPath);
+        if (!folder) {
             return 'unknown';
         }
+
+        const checks: Array<{ pattern: string; language: string }> = [
+            { pattern: 'package.json', language: 'javascript' },
+            { pattern: 'requirements.txt', language: 'python' },
+            { pattern: 'pom.xml', language: 'java' },
+            { pattern: 'go.mod', language: 'go' },
+            { pattern: 'Cargo.toml', language: 'rust' }
+        ];
+
+        for (const check of checks) {
+            const matches = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, check.pattern), '**/node_modules/**', 1);
+            if (matches.length > 0) {
+                return check.language;
+            }
+        }
+
+        return 'unknown';
     }
 
-    private isFileExcluded(filePath: string, excludedPatterns: string[]): boolean {
-        return excludedPatterns.some(pattern => {
-            const minimatch = require('minimatch');
-            return minimatch(filePath, pattern);
-        });
+    private isFileExcluded(filePath: string, patterns: string[]): boolean {
+        return patterns.some((pattern) => minimatch(filePath, pattern));
     }
 
     private async isFileTooLarge(filePath: string, maxSize: number): Promise<boolean> {
@@ -278,11 +328,12 @@ export class AnalysisService {
             const stat = await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
             return stat.size > maxSize;
         } catch (error) {
+            this.logger.warn('读取文件大小失败，忽略限制', error);
             return false;
         }
     }
 
-    getCurrentAnalysis(projectId: string): string | undefined {
-        return this.currentAnalysis.get(projectId);
+    private async delay(ms: number): Promise<void> {
+        return new Promise((resolve) => setTimeout(resolve, ms));
     }
 }

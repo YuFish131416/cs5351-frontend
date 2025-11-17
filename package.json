@@ -23,25 +23,39 @@
         "onLanguage:javascript",
         "onLanguage:typescript",
         "onLanguage:java",
-        "onCommand:technicalDebt.refreshAllDebts"
+        "onCommand:technicalDebt.refreshAllDebts",
+        "onCommand:technicalDebt.openSidebar",
+        "onCommand:technicalDebt.switchViewMode",
+        "onView:technicalDebtView"
     ],
     "main": "./dist/extension.js",
     "browser": "./dist/extension.js",
     "contributes": {
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "technicalDebtSidebar",
+                    "title": "技术债务",
+                    "icon": "media/technical-debt.svg"
+                }
+            ]
+        },
         "views": {
-            "explorer": [
+            "technicalDebtSidebar": [
                 {
                     "id": "technicalDebtView",
-                    "name": "Technical Debt",
+                    "name": "技术债务概览",
                     "icon": "media/technical-debt.svg",
-                    "when": "workspaceHasFolder"
+                    "type": "tree",
+                    "contextualTitle": "技术债务面板",
+                    "group": "technicalDebt@1"
                 }
             ]
         },
         "viewsWelcome": [
             {
                 "view": "technicalDebtView",
-                "contents": "欢迎使用技术债务管理工具！\n[分析当前项目](command:technicalDebt.analyzeWorkspace)\n[打开分析面板](command:technicalDebt.showDashboard)\n[配置设置](command:technicalDebt.showSettings)"
+                "contents": "欢迎使用技术债务主控台！\n[扫描当前文件](command:technicalDebt.scanFile)\n[查看当前文件债务](command:technicalDebt.showFileDebts)\n[聚合工作区债务](command:technicalDebt.openDebtQuickPanel)"
             }
         ],
         "commands": [
@@ -99,48 +113,173 @@
                 "command": "technicalDebt.ignoreDebt",
                 "title": "忽略此债务",
                 "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.scanFile",
+                "title": "技术债务: 扫描当前文件",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.toggleInlineDebts",
+                "title": "技术债务: 切换行内标记",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.showFileDebts",
+                "title": "技术债务: 显示当前文件债务",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.openSidebar",
+                "title": "技术债务: 打开侧栏",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.switchViewMode",
+                "title": "技术债务: 切换视图",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.markDebt.inProgress",
+                "title": "技术债务: 标记为进行中",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.markDebt.resolved",
+                "title": "技术债务: 标记为已解决",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.markDebt.ignored",
+                "title": "技术债务: 忽略此债务",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.revealDebtInEditor",
+                "title": "技术债务: 跳转到代码位置",
+                "category": "Technical Debt"
+            },
+            {
+                "command": "technicalDebt.openDebtQuickPanel",
+                "title": "技术债务: 聚合查看已缓存债务",
+                "category": "Technical Debt"
             }
         ],
         "menus": {
             "view/title": [
                 {
+                    "command": "technicalDebt.switchViewMode",
+                    "when": "view == technicalDebtView",
+                    "group": "navigation@0"
+                },
+                {
                     "command": "technicalDebt.refresh",
                     "when": "view == technicalDebtView",
-                    "group": "navigation"
+                    "group": "navigation@1"
+                },
+                {
+                    "command": "technicalDebt.refreshAllDebts",
+                    "when": "view == technicalDebtView",
+                    "group": "navigation@2"
+                },
+                {
+                    "command": "technicalDebt.openDebtQuickPanel",
+                    "when": "view == technicalDebtView",
+                    "group": "navigation@3"
+                },
+                {
+                    "command": "technicalDebt.scanFile",
+                    "when": "view == technicalDebtView",
+                    "group": "navigation@4"
                 },
                 {
                     "command": "technicalDebt.analyzeWorkspace",
                     "when": "view == technicalDebtView",
-                    "group": "navigation"
+                    "group": "navigation@5"
                 }
             ],
             "view/item/context": [
                 {
-                    "command": "technicalDebt.showDebtDetails",
-                    "when": "view == technicalDebtView && viewItem == debt",
-                    "group": "inline"
+                    "command": "technicalDebt.markDebt.inProgress",
+                    "when": "view == technicalDebtView && viewItem == debtItem",
+                    "group": "technicalDebt@1"
                 },
                 {
-                    "command": "technicalDebt.markAsInProgress",
-                    "when": "view == technicalDebtView && viewItem == debt",
-                    "group": "inline"
+                    "command": "technicalDebt.markDebt.resolved",
+                    "when": "view == technicalDebtView && viewItem == debtItem",
+                    "group": "technicalDebt@2"
                 },
                 {
-                    "command": "technicalDebt.markAsResolved",
-                    "when": "view == technicalDebtView && viewItem == debt",
-                    "group": "inline"
+                    "command": "technicalDebt.markDebt.ignored",
+                    "when": "view == technicalDebtView && viewItem == debtItem",
+                    "group": "technicalDebt@3"
                 },
                 {
-                    "command": "technicalDebt.ignoreDebt",
-                    "when": "view == technicalDebtView && viewItem == debt",
-                    "group": "inline"
+                    "command": "technicalDebt.revealDebtInEditor",
+                    "when": "view == technicalDebtView && viewItem == debtItem",
+                    "group": "technicalDebt@0"
+                },
+                {
+                    "command": "technicalDebt.revealDebtInEditor",
+                    "when": "view == technicalDebtView && viewItem == workspaceDebtItem",
+                    "group": "technicalDebt@0"
+                },
+                {
+                    "command": "technicalDebt.markDebt.inProgress",
+                    "when": "view == technicalDebtView && viewItem == workspaceDebtItem",
+                    "group": "technicalDebt@1"
+                },
+                {
+                    "command": "technicalDebt.markDebt.resolved",
+                    "when": "view == technicalDebtView && viewItem == workspaceDebtItem",
+                    "group": "technicalDebt@2"
+                },
+                {
+                    "command": "technicalDebt.markDebt.ignored",
+                    "when": "view == technicalDebtView && viewItem == workspaceDebtItem",
+                    "group": "technicalDebt@3"
+                },
+                {
+                    "command": "technicalDebt.scanFile",
+                    "when": "view == technicalDebtView && viewItem == debtFile",
+                    "group": "technicalDebtFile@1"
+                },
+                {
+                    "command": "technicalDebt.refreshAllDebts",
+                    "when": "view == technicalDebtView && viewItem == debtFile",
+                    "group": "technicalDebtFile@2"
+                },
+                {
+                    "command": "technicalDebt.openDebtQuickPanel",
+                    "when": "view == technicalDebtView && viewItem == debtFile",
+                    "group": "technicalDebtFile@3"
                 }
             ],
             "editor/context": [
                 {
-                    "command": "technicalDebt.analyzeFile",
-                    "when": "resourceLangId == python || resourceLangId == javascript || resourceLangId == typescript || resourceLangId == java",
+                    "command": "technicalDebt.scanFile",
+                    "when": "resourceScheme == file",
                     "group": "technical-debt@1"
+                },
+                {
+                    "command": "technicalDebt.showFileDebts",
+                    "when": "resourceScheme == file",
+                    "group": "technical-debt@2"
+                },
+                {
+                    "command": "technicalDebt.openDebtQuickPanel",
+                    "when": "resourceScheme == file",
+                    "group": "technical-debt@3"
+                },
+                {
+                    "command": "technicalDebt.refreshAllDebts",
+                    "when": "resourceScheme == file",
+                    "group": "technical-debt@4"
+                },
+                {
+                    "command": "technicalDebt.toggleInlineDebts",
+                    "when": "resourceScheme == file",
+                    "group": "technical-debt@5"
                 }
             ]
         },
@@ -176,6 +315,11 @@
                     "type": "number",
                     "default": 1048576,
                     "description": "最大文件大小（字节），超过此大小的文件不会被分析"
+                },
+                "technicalDebt.analysis.refreshInterval": {
+                    "type": "number",
+                    "default": 0,
+                    "description": "自动刷新缓存的间隔（秒），0 表示禁用定时刷新"
                 },
                 "technicalDebt.ui.showStatusBar": {
                     "type": "boolean",

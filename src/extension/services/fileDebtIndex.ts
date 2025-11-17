@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { DebtService } from './debtService';
 import { Logger } from '../utils/logger';
@@ -8,10 +9,13 @@ export interface FileDebt {
     filePath: string;
     line: number;
     severity: DebtSeverity;
-    description: string;
-    status: string; // keep raw then map if needed
-    createdAt?: string;
-    updatedAt?: string;
+    description?: string;
+    status?: string;
+    metadata?: Record<string, any>;
+    riskFlags?: string[];
+    smellFlags?: string[];
+    estimatedEffort?: number;
+    debtScore?: number;
 }
 
 interface CacheEntry {
@@ -20,92 +24,99 @@ interface CacheEntry {
     filePath: string;
 }
 
+/**
+ * Shared cache of file level debt data to back inline decorations and code lenses.
+ */
 export class FileDebtIndex {
-    private static _instance: FileDebtIndex | undefined;
+    private static instance: FileDebtIndex | undefined;
+
     static getInstance(): FileDebtIndex {
-        if (!this._instance) this._instance = new FileDebtIndex();
-        return this._instance;
+        if (!this.instance) {
+            this.instance = new FileDebtIndex();
+        }
+        return this.instance;
     }
 
-    private logger = Logger.getInstance();
-    private debtService = new DebtService();
-    private cache = new Map<string, CacheEntry>();
-    private ttlMs = 120 * 1000; // 2 minutes default
+    private readonly logger = Logger.getInstance();
+    private readonly debtService = new DebtService();
+    private readonly cache = new Map<string, CacheEntry>();
+    private readonly changeEmitter = new vscode.EventEmitter<void>();
+    readonly onDidChange = this.changeEmitter.event;
+    private ttlMs = 120 * 1000;
     private workspaceProjectId: string | null = null;
     private ensuringProject: Promise<string | null> | null = null;
 
-    setTTL(seconds: number) { this.ttlMs = Math.max(10, seconds) * 1000; }
+    setTTL(seconds: number): void {
+        this.ttlMs = Math.max(10, seconds) * 1000;
+    }
 
     async ensureProject(): Promise<string | null> {
-        if (this.workspaceProjectId) return this.workspaceProjectId;
-        if (this.ensuringProject) return this.ensuringProject;
+        if (this.workspaceProjectId) {
+            return this.workspaceProjectId;
+        }
+        if (this.ensuringProject) {
+            return this.ensuringProject;
+        }
+
         this.ensuringProject = (async () => {
             try {
                 const folder = vscode.workspace.workspaceFolders?.[0];
-                if (!folder) { this.logger.warn('无工作区，跳过项目创建'); return null; }
+                if (!folder) {
+                    this.logger.warn('No workspace folder detected while resolving project id.');
+                    return null;
+                }
+
                 const localPath = folder.uri.fsPath;
-                // 尝试创建或获取
-                const project = await this.debtService.getProjectByPath(localPath) || await this.debtService.createProject({ name: folder.name, localPath });
-                this.workspaceProjectId = String(project.id);
-                this.logger.info('[FileDebtIndex] 使用项目ID: ' + this.workspaceProjectId);
-                return this.workspaceProjectId;
-            } catch (e: any) {
-                this.logger.error('创建/获取项目失败: ' + e.message);
+                const existing = await this.debtService.getProjectByPath(localPath);
+                if (existing) {
+                    this.workspaceProjectId = existing.id;
+                    return existing.id;
+                }
+
+                const created = await this.debtService.createProject({
+                    name: folder.name,
+                    localPath,
+                    language: await this.detectProjectLanguage(folder)
+                });
+                this.workspaceProjectId = created.id;
+                vscode.window.showInformationMessage(`Created project “${created.name}” for technical debt tracking.`);
+                return created.id;
+            } catch (error: any) {
+                this.logger.error('Failed to create or resolve project id: ' + error.message);
                 return null;
             } finally {
                 this.ensuringProject = null;
             }
         })();
+
         return this.ensuringProject;
     }
 
-    private normalizePath(p: string): string {
-        let s = p.replace(/\\/g, '/');
-        s = s.replace(/\/+$/g, '');
-        // VS Code 无直接 env.os 属性，这里使用 process.platform
-        const isWin = process.platform === 'win32';
-        return isWin ? s.toLowerCase() : s;
-    }
-
-    private mapSeverity(raw: string): DebtSeverity {
-        const v = (raw || '').toLowerCase();
-        if (v === 'critical') return DebtSeverity.CRITICAL;
-        if (v === 'high') return DebtSeverity.HIGH;
-        if (v === 'medium') return DebtSeverity.MEDIUM;
-        return DebtSeverity.LOW;
-    }
-
     async scanFile(document: vscode.TextDocument, forceRefresh = false): Promise<FileDebt[]> {
-        const projectId = await this.ensureProject();
-        if (!projectId) return [];
-        const filePath = document.uri.fsPath;
-        const key = this.normalizePath(filePath);
-        const cached = this.cache.get(key);
-        if (cached && !forceRefresh && (Date.now() - cached.fetchedAt < this.ttlMs)) return cached.debts;
-        return this.fetchAndCacheFile(projectId, filePath, key);
-    }
-
-    private async fetchAndCacheFile(projectId: string, filePath: string, key?: string): Promise<FileDebt[]> {
-        const cacheKey = key ?? this.normalizePath(filePath);
-        try {
-            const debtsRaw = await (this.debtService as any).apiClient.getFileDebts(projectId, filePath);
-            const debts: FileDebt[] = (debtsRaw || []).map((d: any) => ({
-                id: String(d.id),
-                filePath: d.file_path || d.filePath || filePath,
-                line: Number(d.line || d.metadata?.location?.line || 1),
-                severity: this.mapSeverity(d.severity),
-                description: d.message || d.description || '',
-                status: String(d.status || 'open').toLowerCase(),
-                createdAt: d.created_at,
-                updatedAt: d.updated_at
-            }));
-            this.cache.set(cacheKey, { debts, fetchedAt: Date.now(), filePath });
-            return debts;
-        } catch (e: any) {
-            this.logger.error('扫描文件失败: ' + e.message);
-            this.cache.delete(cacheKey);
+        if (document.uri.scheme !== 'file') {
+            this.logger.debug('Skipping debt scan for non-file document', { scheme: document.uri.scheme, uri: document.uri.toString() });
             return [];
         }
+
+        if (this.isVirtualDocument(document)) {
+            this.logger.debug('Skipping debt scan for virtual document', { uri: document.uri.toString() });
+            return [];
+        }
+
+        const projectId = await this.ensureProject();
+        if (!projectId) {
+            return [];
+        }
+
+        const filePath = document.uri.fsPath;
+        const cacheKey = this.normalizePath(filePath);
+        const cached = this.cache.get(cacheKey);
+
+        if (cached && !forceRefresh && Date.now() - cached.fetchedAt < this.ttlMs) {
+            return cached.debts;
+        }
+
+        return this.fetchAndCacheFile(projectId, filePath, cacheKey);
     }
 
     getCachedFileDebts(document: vscode.TextDocument): FileDebt[] {
@@ -114,36 +125,180 @@ export class FileDebtIndex {
         return cached ? cached.debts : [];
     }
 
+    getCachedDebtsByPath(filePath: string): FileDebt[] {
+        const key = this.normalizePath(filePath);
+        const cached = this.cache.get(key);
+        return cached ? cached.debts : [];
+    }
+
     async updateDebtStatus(debt: FileDebt, status: DebtStatus): Promise<boolean> {
         try {
-            const mapped = status === DebtStatus.WONT_FIX ? 'ignored' : status;
-            await (this.debtService as any).apiClient.updateDebtStatus(debt.id, mapped);
-            // Invalidate cache for file
+            await this.debtService.updateDebtStatus(debt.id, status);
             const key = this.normalizePath(debt.filePath);
             this.cache.delete(key);
+            this.changeEmitter.fire();
             return true;
-        } catch (e: any) {
-            this.logger.error('更新债务状态失败: ' + e.message);
+        } catch (error: any) {
+            this.logger.error('Failed to update debt status: ' + error.message);
             return false;
         }
     }
 
     aggregateWorkspaceDebts(): FileDebt[] {
         const all: FileDebt[] = [];
-        for (const entry of this.cache.values()) all.push(...entry.debts);
-        return all.sort((a, b) => a.filePath.localeCompare(b.filePath) || a.line - b.line);
+        for (const entry of this.cache.values()) {
+            all.push(...entry.debts);
+        }
+        return all.sort((left, right) => {
+            const pathCompare = left.filePath.localeCompare(right.filePath);
+            return pathCompare !== 0 ? pathCompare : left.line - right.line;
+        });
     }
 
-    clearAll() { this.cache.clear(); }
+    clearAll(): void {
+        this.cache.clear();
+        this.changeEmitter.fire();
+    }
 
     async refreshAllCached(forceRescan = true): Promise<void> {
         const projectId = await this.ensureProject();
-        if (!projectId) return;
+        if (!projectId) {
+            return;
+        }
+
         for (const [key, entry] of this.cache.entries()) {
-            if (!forceRescan && (Date.now() - entry.fetchedAt < this.ttlMs)) {
+            const expired = Date.now() - entry.fetchedAt >= this.ttlMs;
+            if (!forceRescan && !expired) {
                 continue;
             }
             await this.fetchAndCacheFile(projectId, entry.filePath, key);
         }
+    }
+
+    private async fetchAndCacheFile(projectId: string, filePath: string, cacheKey?: string): Promise<FileDebt[]> {
+        const key = cacheKey ?? this.normalizePath(filePath);
+        try {
+            const debts = await this.debtService.getFileDebts(projectId, filePath);
+            const mapped: FileDebt[] = debts.map(debt => ({
+                id: debt.id,
+                filePath: this.resolveAbsolutePath(debt.filePath, filePath),
+                line: Math.max(1, Number(debt.metadata?.location?.line ?? debt.metadata?.line ?? (debt as any).line ?? 1)),
+                severity: this.mapSeverity(debt.severity),
+                description: debt.description,
+                status: String(debt.status || '').toLowerCase() || 'open',
+                metadata: debt.metadata,
+                riskFlags: this.coerceStringArray((debt.metadata as any)?.risk_flags ?? (debt.metadata as any)?.riskFlags),
+                smellFlags: this.coerceStringArray((debt.metadata as any)?.smell_flags ?? (debt.metadata as any)?.smellFlags),
+                estimatedEffort: Number((debt.metadata as any)?.estimated_effort ?? debt.estimatedEffort) || undefined,
+                debtScore: typeof (debt.metadata as any)?.debt_score === 'number' ? (debt.metadata as any).debt_score : undefined
+            }));
+
+            this.cache.set(key, {
+                debts: mapped,
+                fetchedAt: Date.now(),
+                filePath
+            });
+            this.changeEmitter.fire();
+            return mapped;
+        } catch (error: any) {
+            this.logger.error('Failed to fetch file debts: ' + error.message);
+            this.cache.delete(key);
+            this.changeEmitter.fire();
+            return [];
+        }
+    }
+
+    dispose(): void {
+        this.changeEmitter.dispose();
+    }
+
+    private normalizePath(rawPath: string): string {
+        let normalized = rawPath.replace(/\\/g, '/');
+        normalized = normalized.replace(/\/+/g, '/');
+        normalized = normalized.replace(/\/+$/g, '');
+        if (process.platform === 'win32') {
+            normalized = normalized.toLowerCase();
+        }
+        return normalized;
+    }
+
+    private isVirtualDocument(document: vscode.TextDocument): boolean {
+        const raw = document.uri.toString(true).toLowerCase();
+        if (!raw) {
+            return false;
+        }
+        if (raw.includes('extension-output-')) {
+            return true;
+        }
+        if (raw.startsWith('vscode-remote://') || raw.startsWith('vscode-userdata://')) {
+            return true;
+        }
+        return false;
+    }
+
+    private resolveAbsolutePath(preferred: string | undefined, fallback: string): string {
+        const pick = preferred && preferred.trim().length ? preferred : fallback;
+        if (path.isAbsolute(pick)) {
+            return path.normalize(pick);
+        }
+
+        const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+        const containingWorkspace = workspaceFolders.find(folder => fallback.startsWith(folder.uri.fsPath));
+        if (containingWorkspace) {
+            return path.normalize(path.join(containingWorkspace.uri.fsPath, pick));
+        }
+        if (workspaceFolders.length) {
+            return path.normalize(path.join(workspaceFolders[0].uri.fsPath, pick));
+        }
+        return path.normalize(fallback);
+    }
+
+    private mapSeverity(raw: DebtSeverity | string): DebtSeverity {
+        if (Object.values(DebtSeverity).includes(raw as DebtSeverity)) {
+            return raw as DebtSeverity;
+        }
+        const value = String(raw || '').toLowerCase();
+        switch (value) {
+            case 'critical':
+                return DebtSeverity.CRITICAL;
+            case 'high':
+                return DebtSeverity.HIGH;
+            case 'medium':
+                return DebtSeverity.MEDIUM;
+            default:
+                return DebtSeverity.LOW;
+        }
+    }
+
+    private coerceStringArray(value: unknown): string[] | undefined {
+        if (!value) {
+            return undefined;
+        }
+        if (Array.isArray(value)) {
+            return value.filter(item => typeof item === 'string') as string[];
+        }
+        if (typeof value === 'string' && value.trim().length > 0) {
+            return value.split(',').map(item => item.trim()).filter(Boolean);
+        }
+        return undefined;
+    }
+
+    private async detectProjectLanguage(folder: vscode.WorkspaceFolder): Promise<string> {
+        const checks: Array<{ pattern: string; language: string }> = [
+            { pattern: 'package.json', language: 'javascript' },
+            { pattern: 'requirements.txt', language: 'python' },
+            { pattern: 'pom.xml', language: 'java' },
+            { pattern: 'go.mod', language: 'go' },
+            { pattern: 'Cargo.toml', language: 'rust' }
+        ];
+
+        for (const check of checks) {
+            const matches = await vscode.workspace.findFiles(new vscode.RelativePattern(folder, check.pattern), '**/node_modules/**', 1);
+            if (matches.length > 0) {
+                return check.language;
+            }
+        }
+
+        return 'unknown';
     }
 }
